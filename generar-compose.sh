@@ -31,7 +31,7 @@ for ((i=1; i<=CLIENT_COUNT; i++)); do
     entrypoint: /client
     environment:
       - CLI_ID=$i
-      - CLI_LOG_LEVEL=INFO
+      - CLI_LOG_LEVEL=DEBUG
     networks:
       - testing_net
     depends_on:
