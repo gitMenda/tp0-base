@@ -38,4 +38,14 @@ for ((i=1; i<=CLIENT_COUNT; i++)); do
 EOF
 done
 
-echo "Archivo creado y clientes generados. "
+cat >> "$OUTPUT_FILE" << EOF
+
+networks:
+  testing_net:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.25.125.0/24
+EOF
+
+echo "Archivo '$OUTPUT_FILE' generado con éxito para $CLIENT_COUNT cliente(s)."
