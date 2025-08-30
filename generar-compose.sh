@@ -1,7 +1,6 @@
 OUTPUT_FILE="$1"
 CLIENT_COUNT="$2"
 
-# verificacion de argumentos
 if [ -z "$OUTPUT_FILE" ] || [ -z "$CLIENT_COUNT" ]; then
     echo "Uso: $0 <nombre_archivo_salida> <cantidad_clientes>"
     exit 1
@@ -19,6 +18,8 @@ services:
       - LOGGING_LEVEL=DEBUG
     networks:
       - testing_net
+    volumes:
+      - ./server/config.ini:/config.ini
 EOF
 
 for ((i=1; i<=CLIENT_COUNT; i++)); do
@@ -35,6 +36,8 @@ for ((i=1; i<=CLIENT_COUNT; i++)); do
       - testing_net
     depends_on:
       - server
+    volumes:
+      - ./client/config.yaml:/config.yaml
 EOF
 done
 
@@ -48,4 +51,4 @@ networks:
         - subnet: 172.25.125.0/24
 EOF
 
-echo "Archivo '$OUTPUT_FILE' generado con éxito para $CLIENT_COUNT cliente(s)."
+echo "Generated file '$OUTPUT_FILE' for $CLIENT_COUNT clients."
