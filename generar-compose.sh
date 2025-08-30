@@ -7,4 +7,18 @@ if [ -z "$OUTPUT_FILE" ] || [ -z "$CLIENT_COUNT" ]; then
     exit 1
 fi
 
-echo "Validación de argumentos exitosa. Generando..."
+cat > "$OUTPUT_FILE" << EOF
+name: tp0
+services:
+  server:
+    container_name: server
+    image: server:latest
+    entrypoint: python3 /main.py
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOGGING_LEVEL=DEBUG
+    networks:
+      - testing_net
+EOF
+
+echo "Archivo '$OUTPUT_FILE' generado. Agregando clientes..."
