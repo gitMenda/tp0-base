@@ -21,4 +21,21 @@ services:
       - testing_net
 EOF
 
-echo "Archivo '$OUTPUT_FILE' generado. Agregando clientes..."
+for ((i=1; i<=CLIENT_COUNT; i++)); do
+    cat >> "$OUTPUT_FILE" << EOF
+
+  client$i:
+    container_name: client$i
+    image: client:latest
+    entrypoint: /client
+    environment:
+      - CLI_ID=$i
+      - CLI_LOG_LEVEL=DEBUG
+    networks:
+      - testing_net
+    depends_on:
+      - server
+EOF
+done
+
+echo "Archivo creado y clientes generados. "
