@@ -2,7 +2,7 @@ OUTPUT_FILE="$1"
 CLIENT_COUNT="$2"
 
 if [ -z "$OUTPUT_FILE" ] || [ -z "$CLIENT_COUNT" ]; then
-    echo "Uso: $0 <nombre_archivo_salida> <cantidad_clientes>"
+    echo "Using: $0 <nombre_archivo_salida> <cantidad_clientes>"
     exit 1
 fi
 
