@@ -13,13 +13,18 @@ function cleanup {
 trap cleanup EXIT
 
 # creation of the docker network
-docker network create "$NETWORK_NAME" >/dev/null 2>&1
+if ! docker network create "$NETWORK_NAME" >/dev/null 2>&1; then
+    true
+fi
 
 # we now run the server container
-docker run -d --rm --name "$SERVER_CONTAINER_NAME" --network "$NETWORK_NAME" --entrypoint python3 "$SERVER_IMAGE" /main.py
+if ! docker run -d --rm --name "$SERVER_CONTAINER_NAME" --network "$NETWORK_NAME" --entrypoint python3 "$SERVER_IMAGE" /main.py >/dev/null 2>&1; then
+    echo "action: test_echo_server | result: fail"
+    exit 1
+fi
 
 # todo: remove?
-# sleep 2
+sleep 2
 
 # we then run the netcat container to act as the client that communicates with the server
 # we use --rm to make it a temporary container, meaning it will be removed after it exits
