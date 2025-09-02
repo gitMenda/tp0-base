@@ -6,7 +6,7 @@ MESSAGE="Hi server"
 
 RESPONSE=$(docker run --rm --network="$NETWORK_NAME" alpine /bin/sh -c "echo '$MESSAGE' | nc $SERVER_CONTAINER_NAME $SERVER_PORT") 
 
-if [[ "$RESPONSE" == "$MESSAGE" ]]; then
+if [ "$RESPONSE" == "$MESSAGE" ]; then
     echo "action: test_echo_server | result: success"
     exit 0
 else
