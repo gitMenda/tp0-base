@@ -1,5 +1,7 @@
 import socket
 import logging
+import signal
+import sys
 
 
 class Server:
@@ -8,21 +10,34 @@ class Server:
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.bind(('', port))
         self._server_socket.listen(listen_backlog)
+        self._shutdown_requested = False
+        
+        # Set up signal handler for graceful shutdown
+        signal.signal(signal.SIGTERM, self._signal_handler)
+
+    def _signal_handler(self, signum, frame):
+        """
+        Signal handler for graceful shutdown
+        """
+        logging.info(f'action: signal_received | result: success | signal: {signum}')
+        self._shutdown_requested = True
 
     def run(self):
         """
-        Dummy Server loop
+        Server loop with graceful shutdown support
 
         Server that accept a new connections and establishes a
         communication with a client. After client with communucation
         finishes, servers starts to accept new connections again
         """
-
-        # TODO: Modify this program to handle signal to graceful shutdown
-        # the server
-        while True:
-            client_sock = self.__accept_new_connection()
-            self.__handle_client_connection(client_sock)
+        try:
+            while not self._shutdown_requested:
+                client_sock = self.__accept_new_connection()
+                self.__handle_client_connection(client_sock)
+        except Exception as e:
+            logging.error(f'action: server_loop | result: fail | error: {e}')
+        finally:
+            self._cleanup()
 
     def __handle_client_connection(self, client_sock):
         """
@@ -42,6 +57,21 @@ class Server:
             logging.error("action: receive_message | result: fail | error: {e}")
         finally:
             client_sock.close()
+
+    def _cleanup(self):
+        """
+        Clean up resources and close file descriptors
+        """
+        logging.info('action: cleanup | result: in_progress')
+        
+        if self._server_socket:
+            try:
+                self._server_socket.close()
+                logging.info('action: cleanup | result: success | resource: server_socket')
+            except Exception as e:
+                logging.error(f'action: cleanup | result: fail | resource: server_socket | error: {e}')
+        
+        logging.info('action: cleanup | result: success | message: all_resources_closed')
 
     def __accept_new_connection(self):
         """
