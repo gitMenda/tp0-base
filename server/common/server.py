@@ -35,7 +35,10 @@ class Server:
                 client_sock = self.__accept_new_connection()
                 self.__handle_client_connection(client_sock)
         except Exception as e:
-            logging.error(f'action: server_loop | result: fail | error: {e}')
+            if "Shutdown requested" in str(e):
+                logging.info('action: server_loop | result: success | reason: graceful_shutdown')
+            else:
+                logging.error(f'action: server_loop | result: fail | error: {e}')
         finally:
             self._cleanup()
 
@@ -75,14 +78,26 @@ class Server:
 
     def __accept_new_connection(self):
         """
-        Accept new connections
+        Accept new connections with timeout to allow graceful shutdown
 
-        Function blocks until a connection to a client is made.
+        Function blocks until a connection to a client is made or timeout occurs.
         Then connection created is printed and returned
         """
 
         # Connection arrived
         logging.info('action: accept_connections | result: in_progress')
-        c, addr = self._server_socket.accept()
-        logging.info(f'action: accept_connections | result: success | ip: {addr[0]}')
-        return c
+        
+        # Set socket to non-blocking mode with timeout
+        self._server_socket.settimeout(1.0)  # 1 second timeout
+        
+        while not self._shutdown_requested:
+            try:
+                c, addr = self._server_socket.accept()
+                logging.info(f'action: accept_connections | result: success | ip: {addr[0]}')
+                return c
+            except socket.timeout:
+                # Timeout occurred, continue loop to check shutdown flag
+                continue
+        
+        # If we get here, shutdown was requested
+        raise Exception("Shutdown requested during accept timeout")
