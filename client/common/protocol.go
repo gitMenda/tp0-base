@@ -209,18 +209,28 @@ func (p *LotteryProtocol) ReceiveAcknowledgment(conn net.Conn) (string, int, err
 		return "", 0, &ProtocolError{Message: fmt.Sprintf("Failed to receive acknowledgment: %v", err)}
 	}
 
-	// Parse acknowledgment: "document,number\n"
+	// Parse acknowledgment: "apuesta almacenada | dni: {document} | numero: {number}\n"
 	ackStr := string(buffer[:n])
 	ackStr = ackStr[:len(ackStr)-1] // Remove newline
 
-	// Split by comma
-	parts := strings.Split(ackStr, ",")
-	if len(parts) != 2 {
-		return "", 0, &ProtocolError{Message: "Invalid acknowledgment format"}
+	dniStart := strings.Index(ackStr, "dni: ")
+	if dniStart == -1 {
+		return "", 0, &ProtocolError{Message: "Invalid acknowledgment format: missing dni"}
 	}
+	dniStart += 5 // Skip "dni: "
+	dniEnd := strings.Index(ackStr[dniStart:], " |")
+	if dniEnd == -1 {
+		return "", 0, &ProtocolError{Message: "Invalid acknowledgment format: missing dni end"}
+	}
+	document := ackStr[dniStart : dniStart+dniEnd]
 
-	document := parts[0]
-	number, err := strconv.Atoi(parts[1])
+	// Extract number
+	numeroStart := strings.Index(ackStr, "numero: ")
+	if numeroStart == -1 {
+		return "", 0, &ProtocolError{Message: "Invalid acknowledgment format: missing numero"}
+	}
+	numeroStart += 8 // Skip "numero: "
+	number, err := strconv.Atoi(ackStr[numeroStart:])
 	if err != nil {
 		return "", 0, &ProtocolError{Message: fmt.Sprintf("Invalid number in acknowledgment: %v", err)}
 	}

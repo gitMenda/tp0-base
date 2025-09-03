@@ -138,7 +138,7 @@ class LotteryProtocol:
         Acknowledge the client that the bet has been received and stored.
         """
         try:
-            acknowledgment = f"Received and stored bet: {document},{number}\n"
+            acknowledgment = f"apuesta almacenada | dni: {document} | numero: {number}\n"
             socket.send(acknowledgment.encode('utf-8'))
         except OSError as e:
             raise ProtocolError(f"Acknowledgment send failed: {e}")
