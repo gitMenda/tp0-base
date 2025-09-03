@@ -1,8 +1,6 @@
 package common
 
 import (
-	"bufio"
-	"fmt"
 	"net"
 	"os"
 	"os/signal"
@@ -21,6 +19,12 @@ type ClientConfig struct {
 	ServerAddress string
 	LoopAmount    int
 	LoopPeriod    time.Duration
+	// Lottery bet data
+	Nombre     string
+	Apellido   string
+	Documento  string
+	Nacimiento string
+	Numero     string
 }
 
 // Client Entity that encapsulates how
@@ -29,6 +33,7 @@ type Client struct {
 	conn              net.Conn
 	shutdownRequested bool
 	shutdownMutex     sync.RWMutex
+	protocol          *LotteryProtocol
 }
 
 // NewClient Initializes a new client receiving the configuration
@@ -37,6 +42,7 @@ func NewClient(config ClientConfig) *Client {
 	client := &Client{
 		config:            config,
 		shutdownRequested: false,
+		protocol:          NewLotteryProtocol(),
 	}
 
 	// Set up signal handler for graceful shutdown
@@ -98,44 +104,49 @@ func (c *Client) cleanup() {
 	log.Infof("action: cleanup | result: success | client_id: %v | message: all_resources_closed", c.config.ID)
 }
 
-// StartClientLoop Send messages to the client until some time threshold is met
+// StartClientLoop Send lottery bets to the server until some time threshold is met
 func (c *Client) StartClientLoop() {
 	defer c.cleanup()
 
-	// There is an autoincremental msgID to identify every message sent
-	// Messages if the message amount threshold has not been surpassed
+	// Create bet from configuration
+	bet, err := NewBet(c.config.Nombre, c.config.Apellido, c.config.Documento, c.config.Nacimiento, c.config.Numero)
+	if err != nil {
+		log.Errorf("action: create_bet | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		return
+	}
+
+	// Send bets until loop amount is reached or shutdown is requested
 	for msgID := 1; msgID <= c.config.LoopAmount && !c.isShutdownRequested(); msgID++ {
-		// Create the connection the server in every loop iteration. Send an
+		// Create connection to server
 		if err := c.createClientSocket(); err != nil {
 			log.Errorf("action: create_socket | result: fail | client_id: %v | error: %v",
 				c.config.ID, err)
 			return
 		}
 
-		// TODO: Modify the send to avoid short-write
-		fmt.Fprintf(
-			c.conn,
-			"[CLIENT %v] Message N°%v\n",
-			c.config.ID,
-			msgID,
-		)
-		msg, err := bufio.NewReader(c.conn).ReadString('\n')
-		c.conn.Close()
-
-		if err != nil {
-			log.Errorf("action: receive_message | result: fail | client_id: %v | error: %v",
-				c.config.ID,
-				err,
-			)
+		// Send bet using protocol
+		if err := c.sendBet(bet); err != nil {
+			log.Errorf("action: send_bet | result: fail | client_id: %v | error: %v",
+				c.config.ID, err)
+			c.conn.Close()
 			return
 		}
 
-		log.Infof("action: receive_message | result: success | client_id: %v | msg: %v",
-			c.config.ID,
-			msg,
-		)
+		// Receive acknowledgment from server
+		document, number, err := c.protocol.ReceiveAcknowledgment(c.conn)
+		c.conn.Close()
 
-		// Wait a time between sending one message and the next one
+		if err != nil {
+			log.Errorf("action: receive_acknowledgment | result: fail | client_id: %v | error: %v",
+				c.config.ID, err)
+			return
+		}
+
+		// Log bet result
+		log.Infof("action: apuesta_enviada | result: success | dni: %v | numero: %v",
+			document, number)
+
+		// Wait a time between sending one bet and the next one
 		// We adjust sleep logic to sleep in "chunks" of 100ms so that even with a long LoopPeriod, the client will stop upon receiving a SIGTERM within at most 100ms.
 		sleepDuration := c.config.LoopPeriod
 		sleepInterval := 100 * time.Millisecond
@@ -154,4 +165,10 @@ func (c *Client) StartClientLoop() {
 	} else {
 		log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
 	}
+}
+
+// sendBet sends a bet to the server using the protocol
+func (c *Client) sendBet(bet *Bet) error {
+	betData := bet.ToMap()
+	return c.protocol.SendBet(c.conn, betData)
 }
