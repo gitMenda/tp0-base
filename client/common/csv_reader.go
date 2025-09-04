@@ -29,8 +29,8 @@ func NewCSVReader(agencyID string) *CSVReader {
 	}
 }
 
-// reads a total of batchSize bets from the CSV file
-func (r *CSVReader) ReadBets(batchSize int) ([]BetData, error) {
+// reads a total of batchSize bets from the CSV file starting at offset
+func (r *CSVReader) ReadBets(batchSize int, offset int) ([]BetData, error) {
 	file, err := os.Open(r.filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open CSV file %s: %v", r.filePath, err)
@@ -43,20 +43,27 @@ func (r *CSVReader) ReadBets(batchSize int) ([]BetData, error) {
 		return nil, fmt.Errorf("failed to read CSV file: %v", err)
 	}
 
-	// Skip header if present and limit to batch size (might not be needed but won't hurt to check)
-	startIndex := 0
+	// Skip header if present
+	headerOffset := 0
 	if len(records) > 0 && strings.Contains(strings.ToLower(records[0][0]), "nombre") {
-		startIndex = 1
+		headerOffset = 1
+	}
+
+	// Calculate actual start and end indices
+	startIndex := headerOffset + offset
+	endIndex := startIndex + batchSize
+	if endIndex > len(records) {
+		endIndex = len(records)
+	}
+
+	// Return empty if we're beyond available data
+	if startIndex >= len(records) {
+		return []BetData{}, nil
 	}
 
 	var bets []BetData
-	maxRecords := startIndex + batchSize
-	if maxRecords > len(records) {
-		maxRecords = len(records)
-	}
-
 	// read bets one by one until a total of batchSize bets are read from the CSV file and save them in the bets array
-	for i := startIndex; i < maxRecords; i++ {
+	for i := startIndex; i < endIndex; i++ {
 		if len(records[i]) < 5 {
 			continue // Skip incomplete records
 		}

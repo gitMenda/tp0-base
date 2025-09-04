@@ -137,15 +137,6 @@ func (p *LotteryProtocol) sendMessage(conn net.Conn, message []byte) error {
 	return nil
 }
 
-// SendBet sends bet data through socket using the protocol
-func (p *LotteryProtocol) SendBet(conn net.Conn, betData map[string]interface{}) error {
-	message, err := p.serializeBet(betData)
-	if err != nil {
-		return err
-	}
-	return p.sendMessage(conn, message)
-}
-
 // ReceiveAcknowledgment receives a simple acknowledgment from the server
 func (p *LotteryProtocol) ReceiveAcknowledgment(conn net.Conn) (string, int, error) {
 	// Set receive timeout

@@ -1,6 +1,7 @@
 package common
 
 import (
+	"math"
 	"net"
 	"os"
 	"os/signal"
@@ -132,16 +133,29 @@ func (c *Client) StartClientLoop() {
 	log.Infof("action: csv_loaded | result: success | client_id: %v | total_bets: %v",
 		c.config.ID, totalBets)
 
+	// Calculate total number of batches needed
+	totalBatches := int(math.Ceil(float64(totalBets) / float64(c.config.BatchMaxAmount)))
+	log.Infof("action: batch_calculation | result: success | client_id: %v | total_bets: %v | batch_size: %v | total_batches: %v",
+		c.config.ID, totalBets, c.config.BatchMaxAmount, totalBatches)
+
 	// Send bets in batches
 	batchCount := 0
-	for batchCount < c.config.LoopAmount && !c.isShutdownRequested() {
-		// Read batch of bets from CSV
-		bets, err := csvReader.ReadBets(c.config.BatchMaxAmount)
+	betsProcessed := 0
+
+	for batchCount < totalBatches && !c.isShutdownRequested() {
+		log.Infof("action: batch_iteration | result: in_progress | client_id: %v | batch: %v/%v",
+			c.config.ID, batchCount+1, totalBatches)
+
+		// Read batch of bets from CSV with offset
+		bets, err := csvReader.ReadBets(c.config.BatchMaxAmount, betsProcessed)
 		if err != nil {
 			log.Errorf("action: read_batch | result: fail | client_id: %v | error: %v",
 				c.config.ID, err)
 			return
 		}
+
+		log.Infof("action: read_batch | result: success | client_id: %v | bets_read: %v | offset: %v",
+			c.config.ID, len(bets), betsProcessed)
 
 		if len(bets) == 0 {
 			log.Infof("action: no_more_bets | result: success | client_id: %v", c.config.ID)
@@ -199,9 +213,10 @@ func (c *Client) StartClientLoop() {
 		}
 
 		batchCount++
+		betsProcessed += len(betObjects)
 
 		// Wait between batches
-		if batchCount < c.config.LoopAmount && !c.isShutdownRequested() {
+		if batchCount < totalBatches && !c.isShutdownRequested() {
 			sleepDuration := c.config.LoopPeriod
 			sleepInterval := 100 * time.Millisecond
 
@@ -218,13 +233,7 @@ func (c *Client) StartClientLoop() {
 	if c.isShutdownRequested() {
 		log.Infof("action: loop_interrupted | result: success | client_id: %v | reason: shutdown_requested", c.config.ID)
 	} else {
-		log.Infof("action: loop_finished | result: success | client_id: %v | batches_sent: %v",
-			c.config.ID, batchCount)
+		log.Infof("action: loop_finished | result: success | client_id: %v | batches_sent: %v | bets_processed: %v",
+			c.config.ID, batchCount, betsProcessed)
 	}
-}
-
-// sendBet sends a bet to the server using the protocol
-func (c *Client) sendBet(bet *Bet) error {
-	betData := bet.ToMap()
-	return c.protocol.SendBet(c.conn, betData)
 }
