@@ -53,41 +53,62 @@ class Server:
         """
         try:
             addr = client_sock.getpeername()
+            logging.info(f'action: receive_batch | result: in_progress | ip: {addr[0]}')
             
-            # Receive bet data using protocol
-            bet_data = LotteryProtocol.receive_bet(client_sock)
+            # Receive batch data using protocol
+            batch_data = LotteryProtocol.receive_batch(client_sock)
             
-            # Create bet object from received data using utils.Bet class
-            bet = Bet(
-                agency="1",  # Default agency for now
-                first_name=bet_data['nombre'],
-                last_name=bet_data['apellido'],
-                document=bet_data['documento'],
-                birthdate=bet_data['nacimiento'],
-                number=str(bet_data['numero'])
-            )
+            # Process all bets in the batch
+            bets = []
+            all_success = True
             
-            # Store the bet using the provided function
-            store_bets([bet])  # Pass as a list
-            success = True  # store_bets doesn't return a value, assume success
+            for bet_data in batch_data:
+                try:
+                    # Create bet object from received data using utils.Bet class
+                    bet = Bet(
+                        agency="1",  # Default agency for now
+                        first_name=bet_data['nombre'],
+                        last_name=bet_data['apellido'],
+                        document=bet_data['documento'],
+                        birthdate=bet_data['nacimiento'],
+                        number=str(bet_data['numero'])
+                    )
+                    bets.append(bet)
+                except (ValueError, KeyError) as e:
+                    logging.error(f'action: create_bet | result: fail | error: Invalid bet data: {e}')
+                    all_success = False
+                    break
             
-            if success:
-                # Log successful storage
-                logging.info(f'action: apuesta_almacenada | result: success | dni: {bet.document} | numero: {bet.number}')
-                # Send acknowledgment to client
-                LotteryProtocol.acknowledge_bet(client_sock, bet.document, bet.number)
+            # Store all bets if all were valid
+            if all_success and bets:
+                try:
+                    store_bets(bets)
+                    # Log successful storage for each bet
+                    for bet in bets:
+                        logging.info(f'action: apuesta_almacenada | result: success | dni: {bet.document} | numero: {bet.number}')
+                    
+                    # Send batch acknowledgment to client
+                    LotteryProtocol.acknowledge_batch(client_sock, True, len(bets))
+                    logging.info(f'action: apuesta_recibida | result: success | cantidad: {len(bets)}')
+                except Exception as e:
+                    logging.error(f'action: store_batch | result: fail | error: {e}')
+                    LotteryProtocol.acknowledge_batch(client_sock, False, len(bets))
+                    logging.error(f'action: apuesta_recibida | result: fail | cantidad: {len(bets)}')
             else:
-                # Log storage failure
-                logging.error(f'action: apuesta_almacenada | result: fail | dni: {bet.document} | numero: {bet.number}')
+                # Send failure acknowledgment
+                LotteryProtocol.acknowledge_batch(client_sock, False, len(batch_data))
+                logging.error(f'action: apuesta_recibida | result: fail | cantidad: {len(batch_data)}')
             
         except ProtocolError as e:
-            logging.error(f'action: receive_bet | result: fail | error: {e}')
-        except (ValueError, KeyError) as e:
-            logging.error(f'action: receive_bet | result: fail | error: Invalid bet data: {e}')
+            logging.error(f'action: receive_batch | result: fail | error: {e}')
         except OSError as e:
-            logging.error(f'action: receive_bet | result: fail | error: {e}')
+            logging.error(f'action: receive_batch | result: fail | error: {e}')
         finally:
-            client_sock.close()
+            try:
+                client_sock.close()
+                logging.info(f'action: cleanup | result: success | resource: client_socket')
+            except Exception as e:
+                logging.error(f'action: cleanup | result: fail | resource: client_socket | error: {e}')
 
     def _cleanup(self):
         """
