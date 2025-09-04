@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -94,8 +95,14 @@ func (c *Client) cleanup() {
 
 	if c.conn != nil {
 		if err := c.conn.Close(); err != nil {
-			log.Errorf("action: cleanup | result: fail | client_id: %v | resource: connection | error: %v",
-				c.config.ID, err)
+			// Check if it's just a "use of closed network connection" error
+			if strings.Contains(err.Error(), "use of closed network connection") ||
+				strings.Contains(err.Error(), "connection reset by peer") {
+				log.Infof("action: cleanup | result: success | client_id: %v | resource: connection | note: already_closed", c.config.ID)
+			} else {
+				log.Errorf("action: cleanup | result: fail | client_id: %v | resource: connection | error: %v",
+					c.config.ID, err)
+			}
 		} else {
 			log.Infof("action: cleanup | result: success | client_id: %v | resource: connection", c.config.ID)
 		}
@@ -134,7 +141,6 @@ func (c *Client) StartClientLoop() {
 
 		// Receive acknowledgment from server
 		document, number, err := c.protocol.ReceiveAcknowledgment(c.conn)
-		c.conn.Close()
 
 		if err != nil {
 			log.Errorf("action: receive_acknowledgment | result: fail | client_id: %v | error: %v",
