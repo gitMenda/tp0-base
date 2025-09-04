@@ -83,21 +83,17 @@ class Server:
             if all_success and bets:
                 try:
                     store_bets(bets)
-                    # Log successful storage for each bet
-                    for bet in bets:
-                        logging.info(f'action: apuesta_almacenada | result: success | dni: {bet.document} | numero: {bet.number}')
                     
                     # Send batch acknowledgment to client
                     LotteryProtocol.acknowledge_batch(client_sock, True, len(bets))
-                    logging.info(f'action: apuesta_almacenada | result: success | cantidad: {len(bets)}')
+                    logging.info(f'action: apuesta_recibida | result: success | cantidad: {len(bets)}')
                 except Exception as e:
                     logging.error(f'action: store_batch | result: fail | error: {e}')
                     LotteryProtocol.acknowledge_batch(client_sock, False, len(bets))
-                    logging.error(f'action: apuesta_almacenada | result: fail | cantidad: {len(bets)}')
+                    logging.error(f'action: apuesta_recibida | result: fail | cantidad: {len(bets)}')
             else:
                 # Send failure acknowledgment
                 LotteryProtocol.acknowledge_batch(client_sock, False, len(batch_data))
-                logging.error(f'action: apuesta_almacenada | result: fail | cantidad: {len(batch_data)}')
             
         except ProtocolError as e:
             logging.error(f'action: receive_batch | result: fail | error: {e}')
