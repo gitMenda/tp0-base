@@ -3,6 +3,8 @@ import logging
 import signal
 import sys
 import threading
+import queue
+from concurrent.futures import ThreadPoolExecutor
 from .protocol import LotteryProtocol, ProtocolError
 from .utils import store_bets, Bet, load_bets, has_won
 
@@ -22,6 +24,14 @@ class Server:
         self._lottery_lock = threading.Lock()  # Thread safety for lottery state
         self._expected_clients = expected_clients  # Number of clients expected
         
+        # Concurrent processing
+        self._thread_pool = ThreadPoolExecutor(max_workers=10, thread_name_prefix="client_handler")
+        
+        # Storage queue and writer thread
+        self._storage_queue = queue.Queue()
+        self._storage_writer_thread = None
+        self._storage_shutdown = threading.Event()
+        
         # Set up signal handler for graceful shutdown
         signal.signal(signal.SIGTERM, self._signal_handler)
 
@@ -31,6 +41,32 @@ class Server:
         """
         logging.info(f'action: signal_received | result: success | signal: {signum}')
         self._shutdown_requested = True
+
+    def _storage_writer_worker(self):
+        """
+        Dedicated thread for writing bets to storage to avoid concurrent I/O issues.
+        """
+        logging.info('action: storage_writer_start | result: success')
+        
+        while not self._storage_shutdown.is_set():
+            try:
+                # Wait for bets to write with timeout to check shutdown
+                bets = self._storage_queue.get(timeout=1.0)
+                if bets is None:  # Shutdown signal
+                    break
+                
+                # Write bets to storage
+                store_bets(bets)
+                logging.info(f'action: storage_write | result: success | count: {len(bets)}')
+                self._storage_queue.task_done()
+                
+            except queue.Empty:
+                continue  # Check shutdown flag
+            except Exception as e:
+                logging.error(f'action: storage_write | result: fail | error: {e}')
+                self._storage_queue.task_done()
+        
+        logging.info('action: storage_writer_stop | result: success')
 
     def _conduct_lottery(self):
         """
@@ -108,23 +144,34 @@ class Server:
 
     def run(self):
         """
-        Server loop with graceful shutdown support
-
-        Server that accept a new connections and establishes a
-        communication with a client. After client with communucation
-        finishes, servers starts to accept new connections again
+        Concurrent server loop with graceful shutdown support.
+        Uses ThreadPoolExecutor to handle multiple clients simultaneously.
         """
+        # Start storage writer thread
+        self._storage_writer_thread = threading.Thread(target=self._storage_writer_worker, daemon=True)
+        self._storage_writer_thread.start()
+        
         try:
+            logging.info('action: server_start | result: success | max_workers: 10')
+            
             while not self._shutdown_requested:
-                client_sock = self.__accept_new_connection()
-                logging.info('action: connection_accepted | result: success ')
-                self.__handle_client_connection(client_sock)
-                logging.info('action: handled_client | result: success ')
+                try:
+                    client_sock = self.__accept_new_connection()
+                    logging.info('action: connection_accepted | result: success')
+                    
+                    # Submit client handling to thread pool
+                    future = self._thread_pool.submit(self.__handle_client_connection, client_sock)
+                    logging.info('action: client_submitted | result: success | thread_pool: active')
+                    
+                except Exception as e:
+                    if "Shutdown requested" in str(e):
+                        logging.info('action: server_loop | result: success | reason: graceful_shutdown')
+                        break
+                    else:
+                        logging.error(f'action: accept_connection | result: fail | error: {e}')
+                        
         except Exception as e:
-            if "Shutdown requested" in str(e):
-                logging.info('action: server_loop | result: success | reason: graceful_shutdown')
-            else:
-                logging.error(f'action: server_loop | result: fail | error: {e}')
+            logging.error(f'action: server_loop | result: fail | error: {e}')
         finally:
             self._cleanup()
 
@@ -183,16 +230,17 @@ class Server:
                                 all_success = False
                                 break
                         
-                        # Store all bets if all were valid
+                        # Store all bets if all were valid using queue
                         if all_success and bets:
                             try:
-                                store_bets(bets)
+                                # Add bets to storage queue for async writing
+                                self._storage_queue.put(bets)
                                 
                                 # Send batch acknowledgment to client
                                 LotteryProtocol.acknowledge_batch(client_sock, True, len(bets))
                                 logging.info(f'action: apuesta_recibida | result: success | cantidad: {len(bets)}')
                             except Exception as e:
-                                logging.error(f'action: store_batch | result: fail | error: {e}')
+                                logging.error(f'action: queue_batch | result: fail | error: {e}')
                                 LotteryProtocol.acknowledge_batch(client_sock, False, len(bets))
                                 logging.error(f'action: apuesta_recibida | result: fail | cantidad: {len(bets)}')
                         else:
@@ -252,9 +300,11 @@ class Server:
         except Exception as e:
             logging.error(f'action: handle_client | result: fail | error: {e}')
         finally:
+            # Ensure client socket is always closed
             try:
-                client_sock.close()
-                logging.info(f'action: cleanup | result: success | resource: client_socket')
+                if client_sock:
+                    client_sock.close()
+                    logging.info(f'action: cleanup | result: success | resource: client_socket | thread: {threading.current_thread().name}')
             except Exception as e:
                 logging.error(f'action: cleanup | result: fail | resource: client_socket | error: {e}')
 
@@ -264,6 +314,27 @@ class Server:
         """
         logging.info('action: cleanup | result: in_progress | resource: all')
         
+        # Shutdown thread pool
+        if hasattr(self, '_thread_pool'):
+            try:
+                logging.info('action: shutdown_threadpool | result: in_progress')
+                self._thread_pool.shutdown(wait=True, timeout=10)
+                logging.info('action: shutdown_threadpool | result: success')
+            except Exception as e:
+                logging.error(f'action: shutdown_threadpool | result: fail | error: {e}')
+        
+        # Shutdown storage writer thread
+        if hasattr(self, '_storage_writer_thread') and self._storage_writer_thread:
+            try:
+                logging.info('action: shutdown_storage_writer | result: in_progress')
+                self._storage_shutdown.set()
+                self._storage_queue.put(None)  # Signal shutdown
+                self._storage_writer_thread.join(timeout=5)
+                logging.info('action: shutdown_storage_writer | result: success')
+            except Exception as e:
+                logging.error(f'action: shutdown_storage_writer | result: fail | error: {e}')
+        
+        # Close server socket
         if self._server_socket:
             try:
                 self._server_socket.close()
