@@ -138,7 +138,15 @@ func (c *Client) StartClientLoop() {
 	log.Infof("action: batch_calculation | result: success | client_id: %v | total_bets: %v | batch_size: %v | total_batches: %v",
 		c.config.ID, totalBets, c.config.BatchMaxAmount, totalBatches)
 
-	// Send bets in batches
+	// Create single persistent connection to server for all batches
+	if err := c.createClientSocket(); err != nil {
+		log.Errorf("action: create_socket | result: fail | client_id: %v | error: %v",
+			c.config.ID, err)
+		return
+	}
+	log.Infof("action: connection_established | result: success | client_id: %v", c.config.ID)
+
+	// Send bets in batches over the same connection
 	batchCount := 0
 	betsProcessed := 0
 
@@ -177,13 +185,6 @@ func (c *Client) StartClientLoop() {
 
 		if len(betObjects) == 0 {
 			log.Errorf("action: no_valid_bets | result: fail | client_id: %v", c.config.ID)
-			return
-		}
-
-		// Create connection to server
-		if err := c.createClientSocket(); err != nil {
-			log.Errorf("action: create_socket | result: fail | client_id: %v | error: %v",
-				c.config.ID, err)
 			return
 		}
 

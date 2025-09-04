@@ -46,59 +46,74 @@ class Server:
 
     def __handle_client_connection(self, client_sock):
         """
-        Handle lottery bet from a client using the protocol.
+        Handle multiple lottery batches from a client using the protocol.
+        Handle multiple batches over the same persistent connection.
 
         If a problem arises in the communication with the client, the
         client socket will also be closed
         """
         try:
             addr = client_sock.getpeername()
-            logging.info(f'action: receive_batch | result: in_progress | ip: {addr[0]}')
+            logging.info(f'action: client_connected | result: success | ip: {addr[0]}')
             
-            # Receive batch data using protocol
-            batch_data = LotteryProtocol.receive_batch(client_sock)
-            
-            # Process all bets in the batch
-            bets = []
-            all_success = True
-            
-            for bet_data in batch_data:
+            # Handle multiple batches over the same connection
+            batch_count = 0
+            while True:
                 try:
-                    # Create bet object from received data using utils.Bet class
-                    bet = Bet(
-                        agency="1",  # Default agency for now
-                        first_name=bet_data['nombre'],
-                        last_name=bet_data['apellido'],
-                        document=bet_data['documento'],
-                        birthdate=bet_data['nacimiento'],
-                        number=str(bet_data['numero'])
-                    )
-                    bets.append(bet)
-                except (ValueError, KeyError) as e:
-                    logging.error(f'action: create_bet | result: fail | error: Invalid bet data: {e}')
-                    all_success = False
+                    logging.info(f'action: receive_batch | result: in_progress | ip: {addr[0]} | batch_num: {batch_count + 1}')
+                    
+                    # Receive batch data using protocol
+                    batch_data = LotteryProtocol.receive_batch(client_sock)
+                    batch_count += 1
+                    
+                    # Process all bets in the batch
+                    bets = []
+                    all_success = True
+                    
+                    for bet_data in batch_data:
+                        try:
+                            # Create bet object from received data using utils.Bet class
+                            bet = Bet(
+                                agency="1",  # Default agency for now
+                                first_name=bet_data['nombre'],
+                                last_name=bet_data['apellido'],
+                                document=bet_data['documento'],
+                                birthdate=bet_data['nacimiento'],
+                                number=str(bet_data['numero'])
+                            )
+                            bets.append(bet)
+                        except (ValueError, KeyError) as e:
+                            logging.error(f'action: create_bet | result: fail | error: Invalid bet data: {e}')
+                            all_success = False
+                            break
+                    
+                    # Store all bets if all were valid
+                    if all_success and bets:
+                        try:
+                            store_bets(bets)
+                            
+                            # Send batch acknowledgment to client
+                            LotteryProtocol.acknowledge_batch(client_sock, True, len(bets))
+                            logging.info(f'action: apuesta_recibida | result: success | cantidad: {len(bets)}')
+                        except Exception as e:
+                            logging.error(f'action: store_batch | result: fail | error: {e}')
+                            LotteryProtocol.acknowledge_batch(client_sock, False, len(bets))
+                            logging.error(f'action: apuesta_recibida | result: fail | cantidad: {len(bets)}')
+                    else:
+                        # Send failure acknowledgment
+                        LotteryProtocol.acknowledge_batch(client_sock, False, len(batch_data))
+                        logging.error(f'action: apuesta_recibida | result: fail | cantidad: {len(batch_data)}')
+                
+                except (ProtocolError, OSError) as e:
+                    # Client disconnected or protocol error - end of batches
+                    logging.info(f'action: client_disconnected | result: success | ip: {addr[0]} | batches_processed: {batch_count} | reason: {type(e).__name__}')
+                    break
+                except Exception as e:
+                    logging.error(f'action: receive_batch | result: fail | ip: {addr[0]} | error: {e}')
                     break
             
-            # Store all bets if all were valid
-            if all_success and bets:
-                try:
-                    store_bets(bets)
-                    
-                    # Send batch acknowledgment to client
-                    LotteryProtocol.acknowledge_batch(client_sock, True, len(bets))
-                    logging.info(f'action: apuesta_recibida | result: success | cantidad: {len(bets)}')
-                except Exception as e:
-                    logging.error(f'action: store_batch | result: fail | error: {e}')
-                    LotteryProtocol.acknowledge_batch(client_sock, False, len(bets))
-                    logging.error(f'action: apuesta_recibida | result: fail | cantidad: {len(bets)}')
-            else:
-                # Send failure acknowledgment
-                LotteryProtocol.acknowledge_batch(client_sock, False, len(batch_data))
-            
-        except ProtocolError as e:
-            logging.error(f'action: receive_batch | result: fail | error: {e}')
-        except OSError as e:
-            logging.error(f'action: receive_batch | result: fail | error: {e}')
+        except Exception as e:
+            logging.error(f'action: handle_client | result: fail | error: {e}')
         finally:
             try:
                 client_sock.close()
