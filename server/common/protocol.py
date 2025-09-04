@@ -33,7 +33,8 @@ class LotteryProtocol:
         try:
             if len(data) < LotteryProtocol.HEADER_SIZE:
                 raise ProtocolError("Incomplete header")
-            
+            logger.debug(f"data: {data}")
+
             # Extract message length from header
             header_bytes = data[:LotteryProtocol.HEADER_SIZE]
             message_length = int.from_bytes(header_bytes, byteorder='big')
@@ -43,7 +44,9 @@ class LotteryProtocol:
             
             # Extract message data
             message_data = data[LotteryProtocol.HEADER_SIZE:LotteryProtocol.HEADER_SIZE + message_length]
-            
+            logger.debug(f"message_data: {message_data}")
+            logger.debug(f"Actual message data length: {len(message_data)}, message_length: {message_length}")
+
             if len(message_data) != message_length:
                 raise ProtocolError("Incomplete message")
             
@@ -59,6 +62,8 @@ class LotteryProtocol:
                 # 2-byte big-endian decoding using from_bytes
                 field_len = int.from_bytes(message_data[offset:offset+2], byteorder='big')
                 offset += 2
+
+                logger.debug(f"field_len: {field_len}, offset: {offset}, len(message_data): {len(message_data)}")
                 
                 if offset + field_len > len(message_data):
                     raise ProtocolError("Incomplete field data")
@@ -181,22 +186,22 @@ class LotteryProtocol:
             
             bets = []
             for i in range(batch_size):
-                # Find the end of this bet (next bet starts with 2-byte length)
-                bet_end = offset
-                while bet_end < len(message_data) - 1:
-                    # Check if next 2 bytes form a length field for next bet
-                    if bet_end + 2 < len(message_data):
-                        next_len = int.from_bytes(message_data[bet_end:bet_end+2], byteorder='big')
-                        if next_len > 0 and next_len < 1000:  # Reasonable field length (maybe improve this)
-                            break
-                    bet_end += 1
-                
-                if bet_end >= len(message_data):
-                    bet_end = len(message_data)
-                
+                if offset + 4 > len(message_data):
+                    raise ProtocolError("Incomplete bet header")
+
+                bet_length = int.from_bytes(message_data[offset:offset+4], byteorder="big")
+                bet_end = offset + 4 + bet_length  # 4 for header + bet_length for body
+
+                if bet_end > len(message_data):
+                    raise ProtocolError("Incomplete bet data")
+
                 bet_data = message_data[offset:bet_end]
-                bet = LotteryProtocol.deserialize_bet(LotteryProtocol.HEADER_SIZE.to_bytes(4, byteorder='big') + bet_data)
+                logger.debug(f"bet_data: {bet_data}")
+                logger.debug(f"Actual bet data length: {len(bet_data)}, bet_end: {bet_end}")
+
+                bet = LotteryProtocol.deserialize_bet(bet_data)
                 bets.append(bet)
+
                 offset = bet_end
             
             return bets

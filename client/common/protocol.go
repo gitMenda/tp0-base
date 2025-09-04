@@ -242,7 +242,7 @@ func (p *LotteryProtocol) ReceiveBatchResponse(conn net.Conn) (*BatchResponse, e
 	buffer := make([]byte, 1024)
 	n, err := conn.Read(buffer)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to receive batch response: %v", err)
+		return nil, fmt.Errorf("failed to receive batch response: %v", err)
 	}
 
 	responseStr := string(buffer[:n])
@@ -253,13 +253,13 @@ func (p *LotteryProtocol) ReceiveBatchResponse(conn net.Conn) (*BatchResponse, e
 
 	countStart := strings.Index(responseStr, "cantidad: ")
 	if countStart == -1 {
-		return nil, fmt.Errorf("Invalid batch response format")
+		return nil, fmt.Errorf("invalid batch response format")
 	}
 	countStart += 10 // Skip "cantidad: "
 	countStr := responseStr[countStart:]
 	count, err := strconv.Atoi(countStr)
 	if err != nil {
-		return nil, fmt.Errorf("Invalid count in batch response: %v", err)
+		return nil, fmt.Errorf("invalid count in batch response: %v", err)
 	}
 
 	return &BatchResponse{
