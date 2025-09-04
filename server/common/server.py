@@ -38,21 +38,21 @@ class Server:
         NOTE: This method should only be called while holding self._lottery_lock
         """
         try:
-            logging.info('action: conduct_lottery | result: starting')
+            logging.info('action: conduct_lottery | result: in_progress')
             if self._lottery_conducted:
-                logging.info('action: conduct_lottery | result: already_conducted')
+                logging.info('action: conduct_lottery | result: success')
                 return  # Lottery already conducted
             
             logging.info('action: sorteo | result: success')
             self._lottery_conducted = True
             
             # Load all bets and check for winners
-            logging.info('action: loading_bets | result: starting')
+            logging.info('action: loading_bets | result: in_progress')
             try:
                 all_bets = list(load_bets())
                 logging.info(f'action: loading_bets | result: success | total_bets: {len(all_bets)}')
             except FileNotFoundError:
-                logging.warning('action: loading_bets | result: file_not_found | using_empty_list')
+                logging.warning('action: loading_bets | result: fail | using_empty_list')
                 all_bets = []
             except Exception as e:
                 logging.error(f'action: loading_bets | result: fail | error: {e} | using_empty_list')
@@ -60,7 +60,7 @@ class Server:
             
             winners_by_agency = {}
             
-            logging.info('action: checking_winners | result: starting')
+            logging.info('action: checking_winners | result: in_progress')
             for bet in all_bets:
                 if has_won(bet):
                     agency_id = str(bet.agency)
@@ -70,7 +70,7 @@ class Server:
             
             self._winners_by_agency = winners_by_agency
             logging.info(f'action: lottery_completed | result: success | total_winners: {sum(len(winners) for winners in winners_by_agency.values())}')
-            logging.info('action: conduct_lottery | result: completed')
+            logging.info('action: conduct_lottery | result: success')
         except Exception as e:
             logging.error(f'action: conduct_lottery | result: fail | error: {e}')
 
@@ -116,11 +116,10 @@ class Server:
         """
         try:
             while not self._shutdown_requested:
-                logging.info('action: server_loop | result: waiting_for_connection')
                 client_sock = self.__accept_new_connection()
-                logging.info('action: server_loop | result: connection_accepted | starting_handler')
+                logging.info('action: server_loop | result: success | starting_handler')
                 self.__handle_client_connection(client_sock)
-                logging.info('action: server_loop | result: handler_completed | ready_for_next')
+                logging.info('action: server_loop | result: success | ready_for_next')
         except Exception as e:
             if "Shutdown requested" in str(e):
                 logging.info('action: server_loop | result: success | reason: graceful_shutdown')
@@ -214,8 +213,7 @@ class Server:
                             logging.info(f'action: lottery_check_complete | client_id: {client_id}')
                             
                             # Client will disconnect and reconnect for winner query
-                            logging.info(f'action: completion_processed | client_id: {client_id} | connection_will_close')
-                            logging.info(f'action: completion_handler | result: breaking_loop')
+                            logging.info(f'action: completion_handler | result: success')
                             break  # Close this connection, client will reconnect for winner query
                         else:
                             logging.error(f'action: completion_received | result: fail | invalid_message: {message}')
