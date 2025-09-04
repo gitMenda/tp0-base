@@ -14,7 +14,7 @@ class LotteryProtocol:
     """
     
     HEADER_SIZE = 4  # 4 bytes for message length header
-    MAX_MESSAGE_SIZE = 4096  # Maximum message size in bytes
+    MAX_MESSAGE_SIZE = 8092  # Maximum message size in bytes
     
     @staticmethod
     def deserialize_bet(data: bytes) -> Dict[str, Any]:
