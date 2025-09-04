@@ -37,6 +37,7 @@ func InitConfig() (*viper.Viper, error) {
 	v.BindEnv("loop", "period")
 	v.BindEnv("loop", "amount")
 	v.BindEnv("log", "level")
+	v.BindEnv("batch", "maxAmount")
 
 	// Lottery bet environment variables - explicit binding
 	v.BindEnv("nombre", "CLI_NOMBRE")
@@ -121,6 +122,8 @@ func main() {
 		Documento:  v.GetString("documento"),
 		Nacimiento: v.GetString("nacimiento"),
 		Numero:     v.GetString("numero"),
+		// Batch processing
+		BatchMaxAmount: v.GetInt("batch.maxAmount"),
 	}
 
 	client := common.NewClient(clientConfig)
