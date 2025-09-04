@@ -117,9 +117,9 @@ class Server:
         try:
             while not self._shutdown_requested:
                 client_sock = self.__accept_new_connection()
-                logging.info('action: server_loop | result: success | starting_handler')
+                logging.info('action: connection_accepted | result: success ')
                 self.__handle_client_connection(client_sock)
-                logging.info('action: server_loop | result: success | ready_for_next')
+                logging.info('action: handled_client | result: success ')
         except Exception as e:
             if "Shutdown requested" in str(e):
                 logging.info('action: server_loop | result: success | reason: graceful_shutdown')
