@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -26,6 +27,8 @@ type ClientConfig struct {
 	Documento  string
 	Nacimiento string
 	Numero     string
+	// Batch processing
+	BatchMaxAmount int
 }
 
 // Client Entity that encapsulates how
@@ -111,19 +114,58 @@ func (c *Client) cleanup() {
 	log.Infof("action: cleanup | result: success | client_id: %v | message: all_resources_closed", c.config.ID)
 }
 
-// StartClientLoop Send lottery bets to the server until some time threshold is met
+// StartClientLoop Send lottery bets to the server in batches until some time threshold is met
 func (c *Client) StartClientLoop() {
 	defer c.cleanup()
 
-	// Create bet from configuration
-	bet, err := NewBet(c.config.Nombre, c.config.Apellido, c.config.Documento, c.config.Nacimiento, c.config.Numero)
+	// Create CSV reader for this client's agency
+	csvReader := NewCSVReader(c.config.ID)
+
+	// Get total number of bets available
+	totalBets, err := csvReader.GetTotalBets()
 	if err != nil {
-		log.Errorf("action: create_bet | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		log.Errorf("action: get_total_bets | result: fail | client_id: %v | error: %v",
+			c.config.ID, err)
 		return
 	}
 
-	// Send bets until loop amount is reached or shutdown is requested
-	for msgID := 1; msgID <= c.config.LoopAmount && !c.isShutdownRequested(); msgID++ {
+	log.Infof("action: csv_loaded | result: success | client_id: %v | total_bets: %v",
+		c.config.ID, totalBets)
+
+	// Send bets in batches
+	batchCount := 0
+	for batchCount < c.config.LoopAmount && !c.isShutdownRequested() {
+		// Read batch of bets from CSV
+		bets, err := csvReader.ReadBets(c.config.BatchMaxAmount)
+		if err != nil {
+			log.Errorf("action: read_batch | result: fail | client_id: %v | error: %v",
+				c.config.ID, err)
+			return
+		}
+
+		if len(bets) == 0 {
+			log.Infof("action: no_more_bets | result: success | client_id: %v", c.config.ID)
+			break
+		}
+
+		// Convert BetData to Bet objects
+		var betObjects []Bet
+		for _, betData := range bets {
+			bet, err := NewBet(betData.Nombre, betData.Apellido, betData.Documento,
+				betData.Nacimiento, strconv.Itoa(betData.Numero))
+			if err != nil {
+				log.Errorf("action: create_bet | result: fail | client_id: %v | error: %v",
+					c.config.ID, err)
+				continue
+			}
+			betObjects = append(betObjects, *bet)
+		}
+
+		if len(betObjects) == 0 {
+			log.Errorf("action: no_valid_bets | result: fail | client_id: %v", c.config.ID)
+			return
+		}
+
 		// Create connection to server
 		if err := c.createClientSocket(); err != nil {
 			log.Errorf("action: create_socket | result: fail | client_id: %v | error: %v",
@@ -131,45 +173,53 @@ func (c *Client) StartClientLoop() {
 			return
 		}
 
-		// Send bet using protocol
-		if err := c.sendBet(bet); err != nil {
-			log.Errorf("action: send_bet | result: fail | client_id: %v | error: %v",
+		// Send batch using protocol
+		batch := &BatchRequest{Bets: betObjects}
+		if err := c.protocol.SendBatch(c.conn, batch); err != nil {
+			log.Errorf("action: send_batch | result: fail | client_id: %v | error: %v",
 				c.config.ID, err)
-			c.conn.Close()
 			return
 		}
 
-		// Receive acknowledgment from server
-		document, number, err := c.protocol.ReceiveAcknowledgment(c.conn)
-
+		// Receive batch response from server
+		response, err := c.protocol.ReceiveBatchResponse(c.conn)
 		if err != nil {
-			log.Errorf("action: receive_acknowledgment | result: fail | client_id: %v | error: %v",
+			log.Errorf("action: receive_batch_response | result: fail | client_id: %v | error: %v",
 				c.config.ID, err)
 			return
 		}
 
-		// Log bet result
-		log.Infof("action: apuesta_enviada | result: success | dni: %v | numero: %v",
-			document, number)
+		// Log batch result
+		if response.Success {
+			log.Infof("action: batch_enviado | result: success | client_id: %v | cantidad: %v",
+				c.config.ID, response.Count)
+		} else {
+			log.Errorf("action: batch_enviado | result: fail | client_id: %v | cantidad: %v",
+				c.config.ID, response.Count)
+		}
 
-		// Wait a time between sending one bet and the next one
-		// We adjust sleep logic to sleep in "chunks" of 100ms so that even with a long LoopPeriod, the client will stop upon receiving a SIGTERM within at most 100ms.
-		sleepDuration := c.config.LoopPeriod
-		sleepInterval := 100 * time.Millisecond
+		batchCount++
 
-		for sleepDuration > 0 && !c.isShutdownRequested() {
-			if sleepDuration < sleepInterval {
-				sleepInterval = sleepDuration
+		// Wait between batches
+		if batchCount < c.config.LoopAmount && !c.isShutdownRequested() {
+			sleepDuration := c.config.LoopPeriod
+			sleepInterval := 100 * time.Millisecond
+
+			for sleepDuration > 0 && !c.isShutdownRequested() {
+				if sleepDuration < sleepInterval {
+					sleepInterval = sleepDuration
+				}
+				time.Sleep(sleepInterval)
+				sleepDuration -= sleepInterval
 			}
-			time.Sleep(sleepInterval)
-			sleepDuration -= sleepInterval
 		}
 	}
 
 	if c.isShutdownRequested() {
 		log.Infof("action: loop_interrupted | result: success | client_id: %v | reason: shutdown_requested", c.config.ID)
 	} else {
-		log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
+		log.Infof("action: loop_finished | result: success | client_id: %v | batches_sent: %v",
+			c.config.ID, batchCount)
 	}
 }
 
