@@ -101,11 +101,11 @@ func PrintConfig(v *viper.Viper) {
 func main() {
 	v, err := InitConfig()
 	if err != nil {
-		log.Criticalf("%s", err)
+		log.Criticalf("action: init_config | result: fail | error: %s", err)
 	}
 
 	if err := InitLogger(v.GetString("log.level")); err != nil {
-		log.Criticalf("%s", err)
+		log.Criticalf("action: init_logger | result: fail | error: %s", err)
 	}
 
 	// Print program config with debugging purposes

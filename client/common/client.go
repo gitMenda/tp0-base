@@ -246,7 +246,7 @@ func (c *Client) StartClientLoop() {
 
 		// Close connection to allow other clients to connect and complete
 		c.conn.Close()
-		log.Infof("action: disconnected_after_completion | result : success | client_id: %v", c.config.ID)
+		log.Infof("action: disconnected_after_completion | result: success | client_id: %v", c.config.ID)
 
 		// Wait a bit for other clients to complete, then start querying for winners
 		initialWait := 5 * time.Second
@@ -287,7 +287,7 @@ func (c *Client) StartClientLoop() {
 				break
 			} else {
 				// Lottery not ready yet, retry after delay
-				log.Infof("action: lottery_pending | client_id: %v | attempt: %v | retrying_in: %v", c.config.ID, retry+1, retryDelay)
+				log.Infof("action: lottery_pending | result: in_progress | client_id: %v | attempt: %v | retrying_in: %v", c.config.ID, retry+1, retryDelay)
 
 				if retry < maxRetries-1 { // Don't sleep on last attempt
 					time.Sleep(retryDelay)

@@ -80,14 +80,14 @@ class Server:
         """
         with self._lottery_lock:
             self._completed_agencies.add(client_id)
-            logging.info(f'action: agency_completed | client_id: {client_id} | total_completed: {len(self._completed_agencies)}')
+            logging.info(f'action: agency_completed | result: success | client_id: {client_id} | total_completed: {len(self._completed_agencies)}')
             
             if len(self._completed_agencies) >= self._expected_clients and not self._lottery_conducted:
                 # All agencies have completed, conduct lottery
                 logging.info(f'action: lottery_trigger | result: success | completed_agencies: {len(self._completed_agencies)}')
                 self._conduct_lottery()
             else:
-                logging.info(f'action: lottery_wait | completed: {len(self._completed_agencies)}/{self._expected_clients} | already_conducted: {self._lottery_conducted}')
+                logging.info(f'action: lottery_wait | result: success | completed: {len(self._completed_agencies)}/{self._expected_clients} | already_conducted: {self._lottery_conducted}')
 
     def _send_winners_response(self, client_sock, winners):
         """
@@ -208,12 +208,9 @@ class Server:
                             logging.info(f'action: completion_received | result: success | client_id: {client_id}')
                             
                             # Check if all agencies completed and conduct lottery if needed
-                            logging.info(f'action: calling_lottery_check | client_id: {client_id}')
                             self._check_and_conduct_lottery(client_id)
-                            logging.info(f'action: lottery_check_complete | client_id: {client_id}')
                             
                             # Client will disconnect and reconnect for winner query
-                            logging.info(f'action: completion_handler | result: success')
                             break  # Close this connection, client will reconnect for winner query
                         else:
                             logging.error(f'action: completion_received | result: fail | invalid_message: {message}')
@@ -228,7 +225,6 @@ class Server:
                             
                             # Check if lottery has been conducted
                             if not self._lottery_conducted:
-                                logging.info(f'action: lottery_not_ready | client_id: {client_id} | completed: {len(self._completed_agencies)}/{self._expected_clients}')
                                 agency_winners = []  # Return empty if lottery not conducted yet
                             else:
                                 agency_winners = self._winners_by_agency.get(client_id, [])
@@ -266,7 +262,7 @@ class Server:
         """
         Clean up resources and close file descriptors
         """
-        logging.info('action: cleanup | result: in_progress')
+        logging.info('action: cleanup | result: in_progress | resource: all')
         
         if self._server_socket:
             try:
