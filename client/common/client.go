@@ -242,11 +242,57 @@ func (c *Client) StartClientLoop() {
 			log.Errorf("action: send_completion | result: fail | client_id: %v | error: %v", c.config.ID, err)
 		} else {
 			log.Infof("action: send_completion | result: success | client_id: %v", c.config.ID)
+		}
 
-			// Give the server time to receive the completion notification
-			log.Infof("action: waiting_for_server | result: in_progress | client_id: %v", c.config.ID)
-			time.Sleep(200 * time.Millisecond)
-			log.Infof("action: waiting_for_server | result: success | client_id: %v", c.config.ID)
+		// Close connection to allow other clients to connect and complete
+		c.conn.Close()
+		log.Infof("action: disconnected_after_completion | client_id: %v", c.config.ID)
+
+		// Wait a bit for other clients to complete, then start querying for winners
+		initialWait := 5 * time.Second
+		log.Infof("action: waiting_for_other_clients | client_id: %v | wait_time: %v", c.config.ID, initialWait)
+		time.Sleep(initialWait)
+
+		// Query for winners with retry logic (reconnecting each time)
+		maxRetries := 10
+		retryDelay := 2 * time.Second
+
+		for retry := 0; retry < maxRetries; retry++ {
+			// Reconnect for each winner query attempt
+			if err := c.createClientSocket(); err != nil {
+				log.Errorf("action: reconnect_for_winner_query | result: fail | client_id: %v | error: %v", c.config.ID, err)
+				break
+			}
+
+			if err := c.protocol.SendWinnerQuery(c.conn, c.config.ID); err != nil {
+				log.Errorf("action: send_winner_query | result: fail | client_id: %v | error: %v", c.config.ID, err)
+				c.conn.Close()
+				break
+			}
+
+			log.Infof("action: send_winner_query | result: success | client_id: %v | attempt: %v", c.config.ID, retry+1)
+
+			// Receive winners response
+			winnerCount, isReady, err := c.protocol.ReceiveWinnersResponse(c.conn)
+			c.conn.Close() // Always close after receiving response
+
+			if err != nil {
+				log.Errorf("action: receive_winners | result: fail | client_id: %v | error: %v", c.config.ID, err)
+				break
+			}
+
+			if isReady {
+				// Lottery is ready, log final result
+				log.Infof("action: consulta_ganadores | result: success | cant_ganadores: %v", winnerCount)
+				break
+			} else {
+				// Lottery not ready yet, retry after delay
+				log.Infof("action: lottery_pending | client_id: %v | attempt: %v | retrying_in: %v", c.config.ID, retry+1, retryDelay)
+
+				if retry < maxRetries-1 { // Don't sleep on last attempt
+					time.Sleep(retryDelay)
+				}
+			}
 		}
 	}
 }

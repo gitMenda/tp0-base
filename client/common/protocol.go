@@ -16,13 +16,18 @@ var protocolLog = logging.MustGetLogger("protocol")
 
 // Protocol constants
 const (
-	HeaderSize     = 4    // 4 bytes for message length
-	MaxMessageSize = 4096 // Maximum message size in bytes
-	ReceiveTimeout = 5 * time.Second
+	HeaderSize     = 4                // 4 bytes for message length
+	MaxMessageSize = 8092             // Maximum message size in bytes
+	ReceiveTimeout = 30 * time.Second // Increased timeout for sequential server processing
 
 	// Message types (1 byte each)
-	MessageTypeBatch      = 1 // Batch of bets
-	MessageTypeCompletion = 2 // Completion notification
+	MessageTypeBatch       = 1 // Batch of bets
+	MessageTypeCompletion  = 2 // Completion notification
+	MessageTypeWinnerQuery = 3 // Query for winners
+
+	// Winner response status
+	LotteryStatusPending = "PENDING"
+	LotteryStatusReady   = "READY"
 )
 
 type ProtocolError struct {
@@ -294,4 +299,100 @@ func (p *LotteryProtocol) SendCompletionNotification(conn net.Conn, clientID str
 	}
 
 	return nil
+}
+
+// SendWinnerQuery sends a winner query to the server (ie. the client is asking for the winners of the lottery)
+func (p *LotteryProtocol) SendWinnerQuery(conn net.Conn, clientID string) error {
+	message := "QUERY_WINNERS:" + clientID
+	messageBytes := []byte(message)
+
+	// message type byte
+	messageWithType := make([]byte, 1+len(messageBytes))
+	messageWithType[0] = MessageTypeWinnerQuery
+	copy(messageWithType[1:], messageBytes)
+
+	headerBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(headerBytes, uint32(len(messageWithType)))
+
+	var finalBuf bytes.Buffer
+	finalBuf.Write(headerBytes)
+	finalBuf.Write(messageWithType)
+
+	if err := p.sendMessage(conn, finalBuf.Bytes()); err != nil {
+		return fmt.Errorf("failed to send winner query: %v", err)
+	}
+
+	return nil
+}
+
+// ReceiveWinnersResponse receives the winners response from the server
+// Returns (winner_count, is_ready, error)
+func (p *LotteryProtocol) ReceiveWinnersResponse(conn net.Conn) (int, bool, error) {
+	// Set timeout for receiving response
+	conn.SetReadDeadline(time.Now().Add(ReceiveTimeout))
+
+	// Receive message with type
+	messageType, messageData, err := p.receiveMessageWithType(conn)
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to receive winners response: %v", err)
+	}
+
+	// Verify this is a winner query response
+	if messageType != MessageTypeWinnerQuery {
+		return 0, false, fmt.Errorf("expected winner query response (type %d), got type %d", MessageTypeWinnerQuery, messageType)
+	}
+
+	// Parse the response: "WINNERS:STATUS:count:dni1,dni2,..."
+	response := string(messageData)
+	if !strings.HasPrefix(response, "WINNERS:") {
+		return 0, false, fmt.Errorf("invalid winners response format: %s", response)
+	}
+
+	parts := strings.Split(response, ":")
+	if len(parts) < 3 {
+		return 0, false, fmt.Errorf("invalid winners response format: %s", response)
+	}
+
+	status := parts[1]
+	count, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return 0, false, fmt.Errorf("invalid winner count: %s", parts[2])
+	}
+
+	isReady := status == "READY"
+	return count, isReady, nil
+}
+
+// receiveMessageWithType receives a message and returns the type and data
+func (p *LotteryProtocol) receiveMessageWithType(conn net.Conn) (byte, []byte, error) {
+	// Read header (4 bytes)
+	headerBytes := make([]byte, 4)
+	_, err := conn.Read(headerBytes)
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to read header: %v", err)
+	}
+
+	// Extract message length
+	messageLength := binary.BigEndian.Uint32(headerBytes)
+
+	// Read complete message (type + data)
+	messageBytes := make([]byte, messageLength)
+	totalRead := 0
+	for totalRead < int(messageLength) {
+		n, err := conn.Read(messageBytes[totalRead:])
+		if err != nil {
+			return 0, nil, fmt.Errorf("failed to read message: %v", err)
+		}
+		totalRead += n
+	}
+
+	// Extract message type (first byte) and data (rest)
+	if len(messageBytes) < 1 {
+		return 0, nil, fmt.Errorf("message too short to contain type")
+	}
+
+	messageType := messageBytes[0]
+	messageData := messageBytes[1:]
+
+	return messageType, messageData, nil
 }

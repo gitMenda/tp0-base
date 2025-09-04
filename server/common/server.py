@@ -2,17 +2,25 @@ import socket
 import logging
 import signal
 import sys
+import threading
 from .protocol import LotteryProtocol, ProtocolError
-from .utils import store_bets, Bet
+from .utils import store_bets, Bet, load_bets, has_won
 
 
 class Server:
-    def __init__(self, port, listen_backlog):
+    def __init__(self, port, listen_backlog, expected_clients=5):
         # Initialize server socket
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.bind(('', port))
         self._server_socket.listen(listen_backlog)
         self._shutdown_requested = False
+        
+        # Lottery state tracking
+        self._completed_agencies = set()  # Track which agencies have completed
+        self._lottery_conducted = False   # Track if lottery has been conducted
+        self._winners_by_agency = {}      # Store winners for each agency
+        self._lottery_lock = threading.Lock()  # Thread safety for lottery state
+        self._expected_clients = expected_clients  # Number of clients expected
         
         # Set up signal handler for graceful shutdown
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -24,6 +32,80 @@ class Server:
         logging.info(f'action: signal_received | result: success | signal: {signum}')
         self._shutdown_requested = True
 
+    def _conduct_lottery(self):
+        """
+        Conduct the lottery draw and determine winners for each agency.
+        NOTE: This method should only be called while holding self._lottery_lock
+        """
+        try:
+            logging.info('action: conduct_lottery | result: starting')
+            if self._lottery_conducted:
+                logging.info('action: conduct_lottery | result: already_conducted')
+                return  # Lottery already conducted
+            
+            logging.info('action: sorteo | result: success')
+            self._lottery_conducted = True
+            
+            # Load all bets and check for winners
+            logging.info('action: loading_bets | result: starting')
+            try:
+                all_bets = list(load_bets())
+                logging.info(f'action: loading_bets | result: success | total_bets: {len(all_bets)}')
+            except FileNotFoundError:
+                logging.warning('action: loading_bets | result: file_not_found | using_empty_list')
+                all_bets = []
+            except Exception as e:
+                logging.error(f'action: loading_bets | result: fail | error: {e} | using_empty_list')
+                all_bets = []
+            
+            winners_by_agency = {}
+            
+            logging.info('action: checking_winners | result: starting')
+            for bet in all_bets:
+                if has_won(bet):
+                    agency_id = str(bet.agency)
+                    if agency_id not in winners_by_agency:
+                        winners_by_agency[agency_id] = []
+                    winners_by_agency[agency_id].append(bet.document)
+            
+            self._winners_by_agency = winners_by_agency
+            logging.info(f'action: lottery_completed | result: success | total_winners: {sum(len(winners) for winners in winners_by_agency.values())}')
+            logging.info('action: conduct_lottery | result: completed')
+        except Exception as e:
+            logging.error(f'action: conduct_lottery | result: fail | error: {e}')
+
+    def _check_and_conduct_lottery(self, client_id):
+        """
+        Check if all agencies have completed and conduct lottery if ready.
+        """
+        with self._lottery_lock:
+            self._completed_agencies.add(client_id)
+            logging.info(f'action: agency_completed | client_id: {client_id} | total_completed: {len(self._completed_agencies)}')
+            
+            if len(self._completed_agencies) >= self._expected_clients and not self._lottery_conducted:
+                # All agencies have completed, conduct lottery
+                logging.info(f'action: lottery_trigger | result: success | completed_agencies: {len(self._completed_agencies)}')
+                self._conduct_lottery()
+            else:
+                logging.info(f'action: lottery_wait | completed: {len(self._completed_agencies)}/{self._expected_clients} | already_conducted: {self._lottery_conducted}')
+
+    def _send_winners_response(self, client_sock, winners):
+        """
+        Send the list of winner DNIs to the client.
+        """
+        try:
+            # Create winner response message with status
+            if self._lottery_conducted:
+                winners_str = ",".join(winners) if winners else ""
+                response = f"WINNERS:READY:{len(winners)}:{winners_str}"
+            else:
+                response = f"WINNERS:PENDING:0:"
+            
+            # Send using protocol format
+            LotteryProtocol.send_winners_response(client_sock, response)
+        except Exception as e:
+            logging.error(f'action: send_winners | result: fail | error: {e}')
+
     def run(self):
         """
         Server loop with graceful shutdown support
@@ -34,8 +116,11 @@ class Server:
         """
         try:
             while not self._shutdown_requested:
+                logging.info('action: server_loop | result: waiting_for_connection')
                 client_sock = self.__accept_new_connection()
+                logging.info('action: server_loop | result: connection_accepted | starting_handler')
                 self.__handle_client_connection(client_sock)
+                logging.info('action: server_loop | result: handler_completed | ready_for_next')
         except Exception as e:
             if "Shutdown requested" in str(e):
                 logging.info('action: server_loop | result: success | reason: graceful_shutdown')
@@ -122,9 +207,40 @@ class Server:
                         if message.startswith('FINISH:'):
                             client_id = message.split(':')[1]
                             logging.info(f'action: completion_received | result: success | client_id: {client_id}')
-                            break  # Client finished sending bets
+                            
+                            # Check if all agencies completed and conduct lottery if needed
+                            logging.info(f'action: calling_lottery_check | client_id: {client_id}')
+                            self._check_and_conduct_lottery(client_id)
+                            logging.info(f'action: lottery_check_complete | client_id: {client_id}')
+                            
+                            # Client will disconnect and reconnect for winner query
+                            logging.info(f'action: completion_processed | client_id: {client_id} | connection_will_close')
+                            logging.info(f'action: completion_handler | result: breaking_loop')
+                            break  # Close this connection, client will reconnect for winner query
                         else:
                             logging.error(f'action: completion_received | result: fail | invalid_message: {message}')
+                            break
+                    
+                    elif message_type == LotteryProtocol.MESSAGE_TYPE_WINNER_QUERY:
+                        # Handle winner query
+                        message = message_data.decode('utf-8').strip()
+                        if message.startswith('QUERY_WINNERS:'):
+                            client_id = message.split(':')[1]
+                            logging.info(f'action: winner_query_received | result: success | client_id: {client_id}')
+                            
+                            # Check if lottery has been conducted
+                            if not self._lottery_conducted:
+                                logging.info(f'action: lottery_not_ready | client_id: {client_id} | completed: {len(self._completed_agencies)}/{self._expected_clients}')
+                                agency_winners = []  # Return empty if lottery not conducted yet
+                            else:
+                                agency_winners = self._winners_by_agency.get(client_id, [])
+                            
+                            # Send winners for this agency
+                            self._send_winners_response(client_sock, agency_winners)
+                            logging.info(f'action: winners_sent | result: success | client_id: {client_id} | count: {len(agency_winners)}')
+                            break  # Client received winners, connection done
+                        else:
+                            logging.error(f'action: winner_query | result: fail | invalid_message: {message}')
                             break
                     
                     else:

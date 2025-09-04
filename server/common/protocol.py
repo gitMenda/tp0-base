@@ -20,6 +20,7 @@ class LotteryProtocol:
     # Message types
     MESSAGE_TYPE_BATCH = 1      # Batch of bets
     MESSAGE_TYPE_COMPLETION = 2 # Completion notification
+    MESSAGE_TYPE_WINNER_QUERY = 3 # Query for winners
     
     @staticmethod
     def deserialize_bet(data: bytes) -> Dict[str, Any]:
@@ -288,69 +289,6 @@ class LotteryProtocol:
         except (IndexError, UnicodeDecodeError) as e:
             raise ProtocolError(f"Batch deserialization failed: {e}")
     
-    @staticmethod
-    def deserialize_batch(data: bytes) -> List[Dict[str, Any]]:
-        """
-        Deserialize batch of bets from bytes using custom binary protocol.
-        
-        Protocol format (batch of bets):
-        - Header: 4 bytes (indicates message length, excluding the header itself)
-        - Batch size: 4 bytes (number of bets in batch)
-        - For each bet: same format as individual bet
-
-        | Len. Header (LH) |    Batch size    |      Bet 1       |      Bet 2       |       ...        |  Bet batch_size  |
-        |------------------|------------------|------------------|------------------|------------------|------------------|
-        |     4 bytes      |     4 bytes      | LH |    Data     | LH |    Data     | LH |    Data     | LH |    Data     | LH = 4 bytes
-
-        """
-        try:
-            if len(data) < LotteryProtocol.HEADER_SIZE:
-                raise ProtocolError("Incomplete header")
-            
-            # Extract message length from header
-            header_bytes = data[:LotteryProtocol.HEADER_SIZE]
-            message_length = int.from_bytes(header_bytes, byteorder='big')
-            
-            if message_length > LotteryProtocol.MAX_MESSAGE_SIZE:
-                raise ProtocolError(f"Message too large: {message_length} bytes")
-            
-            # Extract message data
-            message_data = data[LotteryProtocol.HEADER_SIZE:LotteryProtocol.HEADER_SIZE + message_length]
-            
-            if len(message_data) != message_length:
-                raise ProtocolError("Incomplete message or wrong message length")
-            
-            # Extract batch size (4 bytes)
-            if len(message_data) < 4:
-                raise ProtocolError("Incomplete batch size")
-            batch_size = int.from_bytes(message_data[:4], byteorder='big')
-
-            offset = 4
-            
-            bets = []
-            for i in range(batch_size):
-                if offset + 4 > len(message_data):
-                    raise ProtocolError("Incomplete bet header")
-
-                bet_length = int.from_bytes(message_data[offset:offset+4], byteorder="big")
-                bet_end = offset + 4 + bet_length  # 4 for header + bet_length for body
-
-                if bet_end > len(message_data):
-                    raise ProtocolError("Incomplete bet data")
-
-                bet_data = message_data[offset:bet_end]
-                #logger.debug(f"bet_data: {bet_data}")
-                #logger.debug(f"Actual bet data length: {len(bet_data)}, bet_end: {bet_end}")
-
-                bet = LotteryProtocol.deserialize_bet(bet_data)
-                bets.append(bet)
-
-                offset = bet_end
-            
-            return bets
-            
-        except Exception as e:
-            raise ProtocolError(f"Batch deserialization failed: {e}")
     
     @staticmethod
     def acknowledge_batch(socket, success: bool, count: int) -> None:
@@ -390,6 +328,27 @@ class LotteryProtocol:
                 
         except Exception as e:
             raise ProtocolError(f"Failed to receive completion notification: {e}")
+    
+    @staticmethod
+    def send_winners_response(socket, response_data: str):
+        """
+        Send winners response to client using protocol format.
+        """
+        try:
+            # Create response message
+            messageBytes = response_data.encode('utf-8')
+            
+            # Add message type byte at the beginning
+            messageWithType = bytes([LotteryProtocol.MESSAGE_TYPE_WINNER_QUERY]) + messageBytes
+
+            # Add header with total message length (including type byte)
+            headerBytes = (len(messageWithType)).to_bytes(4, 'big')
+
+            # Send header + message with type
+            socket.send(headerBytes + messageWithType)
+            
+        except Exception as e:
+            raise ProtocolError(f"Failed to send winners response: {e}")
     
     @staticmethod
     def acknowledge_bet(socket, document: str, number: int) -> None:
