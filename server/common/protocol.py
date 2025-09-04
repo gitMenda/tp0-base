@@ -232,9 +232,10 @@ class LotteryProtocol:
         return LotteryProtocol.deserialize_bet(message)
     
     @staticmethod
-    def receive_batch(socket) -> List[Dict[str, Any]]:
+    def receive_batch(socket) -> tuple[str, List[Dict[str, Any]]]:
         """
         Receive batch of bets from socket using the protocol.
+        Returns: (client_id, list_of_bets)
         """
         message_type, message_data = LotteryProtocol.receive_message_with_type(socket)
         
@@ -246,19 +247,37 @@ class LotteryProtocol:
         return LotteryProtocol.deserialize_batch_data(message_data)
     
     @staticmethod
-    def deserialize_batch_data(data: bytes) -> List[Dict[str, Any]]:
+    def deserialize_batch_data(data: bytes) -> tuple[str, List[Dict[str, Any]]]:
         """
         Deserialize batch of bets from message data (without header and type).
         
         Protocol format (batch data only):
+        - Client ID length: 2 bytes
+        - Client ID: variable length string
         - Batch size: 4 bytes (number of bets in batch)
         - For each bet: same format as individual bet
+        
+        Returns: (client_id, list_of_bets)
         """
         try:
             offset = 0
             
+            # Read client ID length (2 bytes)
+            if len(data) < 2:
+                raise ProtocolError("Incomplete batch data: missing client ID length")
+            
+            client_id_length = int.from_bytes(data[offset:offset+2], byteorder='big')
+            offset += 2
+            
+            # Read client ID
+            if offset + client_id_length > len(data):
+                raise ProtocolError("Incomplete batch data: missing client ID")
+            
+            client_id = data[offset:offset+client_id_length].decode('utf-8')
+            offset += client_id_length
+            
             # Read batch size (number of bets)
-            if len(data) < 4:
+            if offset + 4 > len(data):
                 raise ProtocolError("Incomplete batch data: missing batch size")
             
             batch_size = int.from_bytes(data[offset:offset+4], byteorder='big')
@@ -284,7 +303,7 @@ class LotteryProtocol:
                 bet = LotteryProtocol.deserialize_bet_data(bet_data)
                 bets.append(bet)
             
-            return bets
+            return client_id, bets
             
         except (IndexError, UnicodeDecodeError) as e:
             raise ProtocolError(f"Batch deserialization failed: {e}")

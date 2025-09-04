@@ -188,8 +188,15 @@ func (p *LotteryProtocol) ReceiveAcknowledgment(conn net.Conn) (string, int, err
 }
 
 // serializes a batch of bets (BatchRequest) to be sent to the server
-func (p *LotteryProtocol) SerializeBatch(batch *BatchRequest) ([]byte, error) {
+func (p *LotteryProtocol) SerializeBatch(batch *BatchRequest, clientID string) ([]byte, error) {
 	var messageParts [][]byte
+
+	// Add client ID first (with length prefix)
+	clientIDBytes := []byte(clientID)
+	clientIDLenBytes := make([]byte, 2)
+	binary.BigEndian.PutUint16(clientIDLenBytes, uint16(len(clientIDBytes)))
+	messageParts = append(messageParts, clientIDLenBytes)
+	messageParts = append(messageParts, clientIDBytes)
 
 	// Add batch size (number of bets)
 	batchSizeBytes := make([]byte, 4)
@@ -230,8 +237,8 @@ func (p *LotteryProtocol) SerializeBatch(batch *BatchRequest) ([]byte, error) {
 }
 
 // sends a batch of bets to the server
-func (p *LotteryProtocol) SendBatch(conn net.Conn, batch *BatchRequest) error {
-	data, err := p.SerializeBatch(batch)
+func (p *LotteryProtocol) SendBatch(conn net.Conn, batch *BatchRequest, clientID string) error {
+	data, err := p.SerializeBatch(batch, clientID)
 	if err != nil {
 		return fmt.Errorf("failed to serialize batch: %v", err)
 	}

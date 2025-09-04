@@ -156,8 +156,8 @@ class Server:
                         
                         # Deserialize batch data
                         try:
-                            batch_data = LotteryProtocol.deserialize_batch_data(message_data)
-                            logging.info(f'action: deserialize_batch | result: success | ip: {addr[0]} | bets_count: {len(batch_data)}')
+                            client_id, batch_data = LotteryProtocol.deserialize_batch_data(message_data)
+                            logging.info(f'action: deserialize_batch | result: success | ip: {addr[0]} | client_id: {client_id} | bets_count: {len(batch_data)}')
                         except Exception as e:
                             logging.error(f'action: deserialize_batch | result: fail | ip: {addr[0]} | error: {e} | data_length: {len(message_data)}')
                             raise
@@ -170,7 +170,7 @@ class Server:
                             try:
                                 # Create bet object from received data using utils.Bet class
                                 bet = Bet(
-                                    agency="1",  # Default agency for now
+                                    agency=client_id,  # Use actual client ID as agency
                                     first_name=bet_data['nombre'],
                                     last_name=bet_data['apellido'],
                                     document=bet_data['documento'],

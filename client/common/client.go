@@ -190,7 +190,7 @@ func (c *Client) StartClientLoop() {
 
 		// Send batch using protocol
 		batch := &BatchRequest{Bets: betObjects}
-		if err := c.protocol.SendBatch(c.conn, batch); err != nil {
+		if err := c.protocol.SendBatch(c.conn, batch, c.config.ID); err != nil {
 			log.Errorf("action: send_batch | result: fail | client_id: %v | error: %v",
 				c.config.ID, err)
 			return
