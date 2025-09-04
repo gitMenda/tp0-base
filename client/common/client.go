@@ -250,7 +250,7 @@ func (c *Client) StartClientLoop() {
 
 		// Wait a bit for other clients to complete, then start querying for winners
 		initialWait := 5 * time.Second
-		log.Infof("action: waiting_for_other_clients | client_id: %v | wait_time: %v", c.config.ID, initialWait)
+		log.Infof("action: waiting_for_other_clients | result: in_progress | client_id: %v | wait_time: %v", c.config.ID, initialWait)
 		time.Sleep(initialWait)
 
 		// Query for winners with retry logic (reconnecting each time)
