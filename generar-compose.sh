@@ -41,6 +41,7 @@ for ((i=1; i<=CLIENT_COUNT; i++)); do
       - server
     volumes:
       - ./client/config.yaml:/config.yaml
+      - ./.data:/data
 EOF
 done
 
