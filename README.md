@@ -178,3 +178,242 @@ Se espera que se redacte una sección del README en donde se indique cómo ejecu
 Se proveen [pruebas automáticas](https://github.com/7574-sistemas-distribuidos/tp0-tests) de caja negra. Se exige que la resolución de los ejercicios pase tales pruebas, o en su defecto que las discrepancias sean justificadas y discutidas con los docentes antes del día de la entrega. El incumplimiento de las pruebas es condición de desaprobación, pero su cumplimiento no es suficiente para la aprobación. Respetar las entradas de log planteadas en los ejercicios, pues son las que se chequean en cada uno de los tests.
 
 La corrección personal tendrá en cuenta la calidad del código entregado y casos de error posibles, se manifiesten o no durante la ejecución del trabajo práctico. Se pide a los alumnos leer atentamente y **tener en cuenta** los criterios de corrección informados  [en el campus](https://campusgrado.fi.uba.ar/mod/page/view.php?id=73393).
+
+---
+
+# Soluciones Implementadas
+
+## Ejercicio N°5:
+
+### Decisiones de Diseño
+
+**Protocolo de Comunicación Custom:**
+Se implementó un protocolo binario personalizado para evitar el uso de librerías de serialización como JSON, struct, etc.. El protocolo sigue la estructura:
+
+```
+        | Len. Header (LH) |      Field 1     |      Field 2     |      Field 3     |      Field 4     | Field 5 (Numero) |
+        |------------------|------------------|------------------|------------------|------------------|------------------|
+        |    4 bytes       | LH |    Data     | LH |    Data     | LH |    Data     | LH |    Data     |    4 bytes       | LH = 2 bytes
+
+Esta estructura contiene la informacion de una apuesta (Bet). Se asume que todos los mensajes son Bets. Más adelante, esta estructura fue modificada para contemplar otros tipos de mensajes, como batches de bets, o mensajes de notificación de completitud de procesos.
+```
+
+**Manejo de Short Reads/Writes:**
+Se implementaron funciones auxiliares para garantizar la lectura/escritura completa de datos:
+
+```python
+# Servidor (Python)
+def _receive_complete_data(socket, expected_length):
+    data = b''
+    while len(data) < expected_length:
+        chunk = socket.recv(expected_length - len(data))
+        if not chunk:
+            raise ProtocolError("Connection closed")
+        data += chunk
+    return data
+```
+
+```go
+// Cliente (Go)
+func (p *LotteryProtocol) sendMessage(conn net.Conn, data []byte) error {
+    totalSent := 0
+    for totalSent < len(data) {
+        sent, err := conn.Write(data[totalSent:])
+        if err != nil {
+            return err
+        }
+        totalSent += sent
+    }
+    return nil
+}
+```
+
+**Configuración:**
+- **Cliente:** Variables de entorno (`CLI_NOMBRE`, `CLI_APELLIDO`, etc.) configuradas en los archivos docker compose`
+- **Servidor:** Configuración via `config.ini` para puerto, backlog, y nivel de logging
+
+**Ejecución:**
+```bash
+make docker-compose-up
+make docker-compose-logs
+```
+
+## Ejercicio N°6: Procesamiento por Batches
+
+### Decisiones de Diseño
+
+**Protocolo Extendido:**
+Se modificó el protocolo para poder enviar multiples bets en un mismo mensaje, en batches. Ahora el protocolo tiene el siguiente formato:
+      
+```
+        | Len. Header (LH) |    Batch size    |      Bet 1       |      Bet 2       |       ...        |  Bet batch_size  |
+        |------------------|------------------|------------------|------------------|------------------|------------------|
+        |     4 bytes      |     4 bytes      | LH |    Data     | LH |    Data     | LH |    Data     | LH |    Data     | LH = 4 bytes
+```
+El formato de una bet individual sigue lo esperado en el protocolo definido en el ejercicio 5.
+
+**Lectura de CSV:**
+Se implementó un lector de CSV con soporte para offset, permitiendo procesar archivos grandes en chunks:
+
+```go
+func (r *CSVReader) ReadBets(batchSize int, offset int) ([]BetData, error) {
+    // Leer desde offset específico para procesamiento incremental
+}
+```
+
+**Configuración de Batch Size:**
+En `config.yaml`:
+```yaml
+batch:
+  maxAmount: 10 
+```
+
+**Datos Requeridos:**
+- Archivos CSV en `.data/agency-{N}.csv` montados como volúmenes
+- Formato: `nombre,apellido,documento,nacimiento,numero`
+
+**Ejecución:**
+```bash
+# Generar compose con múltiples clientes
+./generar-compose.sh docker-compose-lottery.yaml 5
+docker compose -f docker-compose-lottery.yaml up --build
+```
+
+## Ejercicio N°7: Sistema de Sorteo con Múltiples Clientes
+
+### Decisiones de Diseño
+
+**Protocolo Multi-Tipo:**
+Se extendió el protocolo con tipos de mensaje específicos:
+- `MESSAGE_TYPE_BATCH = 1`: Lotes de apuestas
+- `MESSAGE_TYPE_COMPLETION = 2`: Notificación de finalización
+- `MESSAGE_TYPE_WINNER_QUERY = 3`: Consulta de ganadores
+
+Se cambió tambien la estructura de un mensaje de batch de bets para manejar mejor los múltiples clientes. 
+El formato de un mensaje de batch de bets, por ejemplo, tendrá la siguiente estructura:
+
+[ Len. Header ] [ Tipo: BATCH ] [ Client ID Length: 2 bytes ] [ Client ID ] [ Batch Size: 4 bytes ] [ Bet Data... ]
+
+Donde [Bet Data...] son todas las Bets del batch, cada una de ellas siguiendo la estructura detallada en el protocolo del ejercicio 5. 
+
+Se incluye 
+
+**Sincronización de Estado:**
+```python
+class Server:
+    def __init__(self):
+        self._completed_agencies = set()
+        self._lottery_conducted = False
+        self._winners_by_agency = {}
+        self._lottery_lock = threading.Lock()
+```
+
+**Flujo de Sorteo:**
+1. Clientes envían todos sus batches
+2. Cliente envía mensaje `FINISH:{CLIENT_ID}` y desconecta
+3. Servidor espera notificaciones de todas las agencias
+4. Cuando se completan 5 agencias, se ejecuta `_conduct_lottery()`
+5. Clientes se reconectan para consultar ganadores cada 2 segundos (en caso de que el servidor esté ocupado o no haya realizado el sorteo aún) hasta recibir los ganadores o sufrir un timeout. 
+
+**Manejo de Conexiones Persistentes:**
+- Una conexión por cliente para envío de batches
+- Desconexión tras completar envío
+- Reconexión independiente para consulta de ganadores
+
+**Configuración del Número de Clientes:**
+```bash
+# En docker-compose
+environment:
+  - CLIENT_COUNT=5
+```
+
+El servidor infiere automáticamente cuántos clientes esperar.
+
+**Ejecución:**
+```bash
+./generar-compose.sh docker-compose-lottery.yaml 5
+timeout 60 docker compose -f docker-compose-lottery.yaml up --build
+```
+
+## Ejercicio N°8: Concurrencia con Multithreading
+
+### Decisiones de Diseño
+
+**ThreadPoolExecutor:**
+Se optó por `ThreadPoolExecutor` en lugar de crear threads manualmente para mejor gestión de recursos:
+
+```python
+self._thread_pool = ThreadPoolExecutor(
+    max_workers=10, 
+    thread_name_prefix="client_handler"
+)
+```
+
+**Cola de Almacenamiento:**
+Para evitar condiciones de carrera en I/O, se implementó un patrón productor-consumidor:
+
+```python
+# Thread dedicado para escritura
+def _storage_writer_worker(self):
+    while not self._storage_shutdown.is_set():
+        bets = self._storage_queue.get(timeout=1.0)
+        if bets is None:  # Señal de shutdown
+            break
+        store_bets(bets)
+```
+
+**Sincronización de Estado Compartido:**
+```python
+def _check_and_conduct_lottery(self, client_id):
+    with self._lottery_lock:  # Protección de sección crítica
+        self._completed_agencies.add(client_id)
+        if len(self._completed_agencies) >= self._expected_clients:
+            self._conduct_lottery()
+```
+
+**Gestión de Recursos:**
+- Cierre automático de sockets en cada thread handler
+- Shutdown graceful del thread pool con timeout
+- Logging específico por thread para debugging
+
+**Prevención de Deadlocks:**
+Se evitó el anidamiento de locks. El método `_conduct_lottery()` no adquiere `_lottery_lock` ya que su caller ya lo posee.
+
+**Configuración:**
+No requiere configuración adicional. El sistema detecta automáticamente la carga y distribuye el trabajo.
+
+**Ejecución:**
+```bash
+# Mismos comandos que ejercicio 7
+./generar-compose.sh docker-compose-lottery.yaml 5
+timeout 60 docker compose -f docker-compose-lottery.yaml up --build
+```
+
+---
+
+## Comandos de Ejecución por Ejercicio
+
+### Ejercicio 5:
+```bash
+make docker-compose-up
+make docker-compose-logs
+```
+
+### Ejercicio 6:
+```bash
+./generar-compose.sh docker-compose-dev.yaml 3
+docker compose -f docker-compose-dev.yaml up --build
+```
+
+### Ejercicios 7 y 8:
+```bash
+./generar-compose.sh docker-compose-lottery.yaml 5
+timeout 60 docker compose -f docker-compose-lottery.yaml up --build
+```
+
+### Verificación de Logs:
+```bash
+docker compose logs | grep "action: consulta_ganadores"
+docker compose logs | grep "action: sorteo"
+docker compose logs | grep "thread_handler"
+```
