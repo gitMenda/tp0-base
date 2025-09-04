@@ -246,7 +246,7 @@ func (c *Client) StartClientLoop() {
 
 		// Close connection to allow other clients to connect and complete
 		c.conn.Close()
-		log.Infof("action: disconnected_after_completion | client_id: %v", c.config.ID)
+		log.Infof("action: disconnected_after_completion | result : success | client_id: %v", c.config.ID)
 
 		// Wait a bit for other clients to complete, then start querying for winners
 		initialWait := 5 * time.Second
