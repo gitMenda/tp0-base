@@ -33,7 +33,7 @@ class LotteryProtocol:
         try:
             if len(data) < LotteryProtocol.HEADER_SIZE:
                 raise ProtocolError("Incomplete header")
-            logger.debug(f"data: {data}")
+            #logger.debug(f"data: {data}")
 
             # Extract message length from header
             header_bytes = data[:LotteryProtocol.HEADER_SIZE]
@@ -44,8 +44,8 @@ class LotteryProtocol:
             
             # Extract message data
             message_data = data[LotteryProtocol.HEADER_SIZE:LotteryProtocol.HEADER_SIZE + message_length]
-            logger.debug(f"message_data: {message_data}")
-            logger.debug(f"Actual message data length: {len(message_data)}, message_length: {message_length}")
+            #logger.debug(f"message_data: {message_data}")
+            #logger.debug(f"Actual message data length: {len(message_data)}, message_length: {message_length}")
 
             if len(message_data) != message_length:
                 raise ProtocolError("Incomplete message")
@@ -63,7 +63,7 @@ class LotteryProtocol:
                 field_len = int.from_bytes(message_data[offset:offset+2], byteorder='big')
                 offset += 2
 
-                logger.debug(f"field_len: {field_len}, offset: {offset}, len(message_data): {len(message_data)}")
+                #logger.debug(f"field_len: {field_len}, offset: {offset}, len(message_data): {len(message_data)}")
                 
                 if offset + field_len > len(message_data):
                     raise ProtocolError("Incomplete field data")
@@ -196,8 +196,8 @@ class LotteryProtocol:
                     raise ProtocolError("Incomplete bet data")
 
                 bet_data = message_data[offset:bet_end]
-                logger.debug(f"bet_data: {bet_data}")
-                logger.debug(f"Actual bet data length: {len(bet_data)}, bet_end: {bet_end}")
+                #logger.debug(f"bet_data: {bet_data}")
+                #logger.debug(f"Actual bet data length: {len(bet_data)}, bet_end: {bet_end}")
 
                 bet = LotteryProtocol.deserialize_bet(bet_data)
                 bets.append(bet)
