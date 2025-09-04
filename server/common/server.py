@@ -3,8 +3,7 @@ import logging
 import signal
 import sys
 from .protocol import LotteryProtocol, ProtocolError
-from .models import Bet, BetResponse
-from .utils import store_bets
+from .utils import store_bets, Bet
 
 
 class Server:
@@ -59,20 +58,28 @@ class Server:
             # Receive bet data using protocol
             bet_data = LotteryProtocol.receive_bet(client_sock)
             
-            # Create bet object from received data
-            bet = Bet.from_dict(bet_data)
+            # Create bet object from received data using utils.Bet class
+            bet = Bet(
+                agency="1",  # Default agency for now
+                first_name=bet_data['nombre'],
+                last_name=bet_data['apellido'],
+                document=bet_data['documento'],
+                birthdate=bet_data['nacimiento'],
+                number=str(bet_data['numero'])
+            )
             
             # Store the bet using the provided function
-            success = store_bets(bet)
+            store_bets([bet])  # Pass as a list
+            success = True  # store_bets doesn't return a value, assume success
             
             if success:
                 # Log successful storage
-                logging.info(f'action: apuesta_almacenada | result: success | dni: {bet.documento} | numero: {bet.numero}')
+                logging.info(f'action: apuesta_almacenada | result: success | dni: {bet.document} | numero: {bet.number}')
                 # Send acknowledgment to client
-                LotteryProtocol.acknowledge_bet(client_sock, bet.documento, bet.numero)
+                LotteryProtocol.acknowledge_bet(client_sock, bet.document, bet.number)
             else:
                 # Log storage failure
-                logging.error(f'action: apuesta_almacenada | result: fail | dni: {bet.documento} | numero: {bet.numero}')
+                logging.error(f'action: apuesta_almacenada | result: fail | dni: {bet.document} | numero: {bet.number}')
             
         except ProtocolError as e:
             logging.error(f'action: receive_bet | result: fail | error: {e}')

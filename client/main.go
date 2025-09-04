@@ -38,12 +38,12 @@ func InitConfig() (*viper.Viper, error) {
 	v.BindEnv("loop", "amount")
 	v.BindEnv("log", "level")
 
-	// Lottery bet environment variables
-	v.BindEnv("nombre")
-	v.BindEnv("apellido")
-	v.BindEnv("documento")
-	v.BindEnv("nacimiento")
-	v.BindEnv("numero")
+	// Lottery bet environment variables - explicit binding
+	v.BindEnv("nombre", "CLI_NOMBRE")
+	v.BindEnv("apellido", "CLI_APELLIDO")
+	v.BindEnv("documento", "CLI_DOCUMENTO")
+	v.BindEnv("nacimiento", "CLI_NACIMIENTO")
+	v.BindEnv("numero", "CLI_NUMERO")
 
 	// Try to read configuration from config file. If config file
 	// does not exists then ReadInConfig will fail but configuration
