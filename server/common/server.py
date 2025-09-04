@@ -53,7 +53,6 @@ class Server:
         """
         try:
             addr = client_sock.getpeername()
-            logging.info(f'action: receive_bet | result: in_progress | ip: {addr[0]}')
             
             # Receive bet data using protocol
             bet_data = LotteryProtocol.receive_bet(client_sock)
