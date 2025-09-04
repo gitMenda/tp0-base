@@ -32,6 +32,18 @@ func (e *ProtocolError) Error() string {
 // LotteryProtocol handles communication protocol for the lottery system
 type LotteryProtocol struct{}
 
+// BatchRequest represents a batch of bets to be sent
+type BatchRequest struct {
+	Bets []Bet
+}
+
+// BatchResponse represents the server's response to a batch
+type BatchResponse struct {
+	Success bool
+	Message string
+	Count   int
+}
+
 func NewLotteryProtocol() *LotteryProtocol {
 	return &LotteryProtocol{}
 }
@@ -108,69 +120,6 @@ func (p *LotteryProtocol) serializeBet(betData map[string]interface{}) ([]byte, 
 	return append(header, message...), nil
 }
 
-// deserializeBet deserializes bet data from bytes using our custom binary protocol
-func (p *LotteryProtocol) deserializeBet(data []byte) (map[string]interface{}, error) {
-	if len(data) < HeaderSize {
-		return nil, &ProtocolError{Message: "Incomplete header"}
-	}
-
-	// Extract message length from header
-	messageLength := binary.BigEndian.Uint32(data[:HeaderSize])
-
-	if messageLength > MaxMessageSize {
-		return nil, &ProtocolError{Message: fmt.Sprintf("Message too large: %d bytes", messageLength)}
-	}
-
-	// Extract message data
-	messageData := data[HeaderSize : HeaderSize+messageLength]
-
-	if len(messageData) != int(messageLength) {
-		return nil, &ProtocolError{Message: "Incomplete message"}
-	}
-
-	// Parse fields in fixed order: nombre, apellido, documento, nacimiento, numero
-	offset := 0
-	fields := make([]string, 4)
-
-	// Parse first 4 string fields (each prefixed with 2-byte length)
-	for i := 0; i < 4; i++ {
-		if offset+2 > len(messageData) {
-			return nil, &ProtocolError{Message: "Incomplete field length"}
-		}
-
-		fieldLen := binary.BigEndian.Uint16(messageData[offset : offset+2])
-		offset += 2
-
-		if offset+int(fieldLen) > len(messageData) {
-			return nil, &ProtocolError{Message: "Incomplete field data"}
-		}
-
-		fieldData := messageData[offset : offset+int(fieldLen)]
-		fields[i] = string(fieldData)
-		offset += int(fieldLen)
-	}
-
-	// Parse numero as 4-byte integer
-	if offset+4 > len(messageData) {
-		return nil, &ProtocolError{Message: "Incomplete numero field"}
-	}
-
-	numero := binary.BigEndian.Uint32(messageData[offset : offset+4])
-
-	// Check if we consumed all data
-	if offset+4 != len(messageData) {
-		return nil, &ProtocolError{Message: "Extra data in message"}
-	}
-
-	return map[string]interface{}{
-		"nombre":     fields[0],
-		"apellido":   fields[1],
-		"documento":  fields[2],
-		"nacimiento": fields[3],
-		"numero":     int(numero),
-	}, nil
-}
-
 // sendMessage sends the complete message through the socket
 func (p *LotteryProtocol) sendMessage(conn net.Conn, message []byte) error {
 	totalSent := 0
@@ -236,4 +185,86 @@ func (p *LotteryProtocol) ReceiveAcknowledgment(conn net.Conn) (string, int, err
 	}
 
 	return document, number, nil
+}
+
+// serializes a batch of bets (BatchRequest) to be sent to the server
+func (p *LotteryProtocol) SerializeBatch(batch *BatchRequest) ([]byte, error) {
+	var messageParts [][]byte
+
+	// Add batch size (number of bets)
+	batchSizeBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(batchSizeBytes, uint32(len(batch.Bets)))
+	messageParts = append(messageParts, batchSizeBytes)
+
+	// Serialize each bet and append to the message parts array
+	for _, bet := range batch.Bets {
+		betBytes, err := p.serializeBet(bet.ToMap())
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize bet: %v", err)
+		}
+		messageParts = append(messageParts, betBytes)
+	}
+
+	// Combine all parts
+	var buf bytes.Buffer
+	for _, part := range messageParts {
+		buf.Write(part)
+	}
+	message := buf.Bytes()
+
+	// Add header with total message length
+	headerBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(headerBytes, uint32(len(message)))
+
+	// Combine header and message
+	var finalBuf bytes.Buffer
+	finalBuf.Write(headerBytes)
+	finalBuf.Write(message)
+
+	return finalBuf.Bytes(), nil
+}
+
+// sends a batch of bets to the server
+func (p *LotteryProtocol) SendBatch(conn net.Conn, batch *BatchRequest) error {
+	data, err := p.SerializeBatch(batch)
+	if err != nil {
+		return fmt.Errorf("failed to serialize batch: %v", err)
+	}
+
+	return p.sendMessage(conn, data)
+}
+
+// receives batch response from server and returns a BatchResponse instance with the response data
+func (p *LotteryProtocol) ReceiveBatchResponse(conn net.Conn) (*BatchResponse, error) {
+	// Set timeout for receiving response
+	conn.SetReadDeadline(time.Now().Add(ReceiveTimeout))
+
+	buffer := make([]byte, 1024)
+	n, err := conn.Read(buffer)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to receive batch response: %v", err)
+	}
+
+	responseStr := string(buffer[:n])
+	responseStr = strings.TrimSpace(responseStr)
+
+	// Parse response: "action: apuesta_recibida | result: success/fail | cantidad: {count}"
+	success := strings.Contains(responseStr, "result: success")
+
+	countStart := strings.Index(responseStr, "cantidad: ")
+	if countStart == -1 {
+		return nil, fmt.Errorf("Invalid batch response format")
+	}
+	countStart += 10 // Skip "cantidad: "
+	countStr := responseStr[countStart:]
+	count, err := strconv.Atoi(countStr)
+	if err != nil {
+		return nil, fmt.Errorf("Invalid count in batch response: %v", err)
+	}
+
+	return &BatchResponse{
+		Success: success,
+		Message: responseStr,
+		Count:   count,
+	}, nil
 }
