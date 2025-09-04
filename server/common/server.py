@@ -60,56 +60,83 @@ class Server:
             batch_count = 0
             while True:
                 try:
-                    logging.info(f'action: receive_batch | result: in_progress | ip: {addr[0]} | batch_num: {batch_count + 1}')
+                    logging.info(f'action: receive_message | result: in_progress | ip: {addr[0]}')
                     
-                    # Receive batch data using protocol
-                    batch_data = LotteryProtocol.receive_batch(client_sock)
-                    batch_count += 1
+                    # Receive message with type information
+                    message_type, message_data = LotteryProtocol.receive_message_with_type(client_sock)
                     
-                    # Process all bets in the batch
-                    bets = []
-                    all_success = True
-                    
-                    for bet_data in batch_data:
+                    if message_type == LotteryProtocol.MESSAGE_TYPE_BATCH:
+                        # Handle batch message
+                        batch_count += 1
+                        logging.info(f'action: batch_received | result: success | ip: {addr[0]} | batch_num: {batch_count}')
+                        
+                        # Deserialize batch data
                         try:
-                            # Create bet object from received data using utils.Bet class
-                            bet = Bet(
-                                agency="1",  # Default agency for now
-                                first_name=bet_data['nombre'],
-                                last_name=bet_data['apellido'],
-                                document=bet_data['documento'],
-                                birthdate=bet_data['nacimiento'],
-                                number=str(bet_data['numero'])
-                            )
-                            bets.append(bet)
-                        except (ValueError, KeyError) as e:
-                            logging.error(f'action: create_bet | result: fail | error: Invalid bet data: {e}')
-                            all_success = False
+                            batch_data = LotteryProtocol.deserialize_batch_data(message_data)
+                            logging.info(f'action: deserialize_batch | result: success | ip: {addr[0]} | bets_count: {len(batch_data)}')
+                        except Exception as e:
+                            logging.error(f'action: deserialize_batch | result: fail | ip: {addr[0]} | error: {e} | data_length: {len(message_data)}')
+                            raise
+                        
+                        # Process all bets in the batch
+                        bets = []
+                        all_success = True
+                        
+                        for bet_data in batch_data:
+                            try:
+                                # Create bet object from received data using utils.Bet class
+                                bet = Bet(
+                                    agency="1",  # Default agency for now
+                                    first_name=bet_data['nombre'],
+                                    last_name=bet_data['apellido'],
+                                    document=bet_data['documento'],
+                                    birthdate=bet_data['nacimiento'],
+                                    number=str(bet_data['numero'])
+                                )
+                                bets.append(bet)
+                            except (ValueError, KeyError) as e:
+                                logging.error(f'action: create_bet | result: fail | error: Invalid bet data: {e}')
+                                all_success = False
+                                break
+                        
+                        # Store all bets if all were valid
+                        if all_success and bets:
+                            try:
+                                store_bets(bets)
+                                
+                                # Send batch acknowledgment to client
+                                LotteryProtocol.acknowledge_batch(client_sock, True, len(bets))
+                                logging.info(f'action: apuesta_recibida | result: success | cantidad: {len(bets)}')
+                            except Exception as e:
+                                logging.error(f'action: store_batch | result: fail | error: {e}')
+                                LotteryProtocol.acknowledge_batch(client_sock, False, len(bets))
+                                logging.error(f'action: apuesta_recibida | result: fail | cantidad: {len(bets)}')
+                        else:
+                            # Send failure acknowledgment
+                            LotteryProtocol.acknowledge_batch(client_sock, False, len(batch_data))
+                            logging.error(f'action: apuesta_recibida | result: fail | cantidad: {len(batch_data)}')
+                    
+                    elif message_type == LotteryProtocol.MESSAGE_TYPE_COMPLETION:
+                        # Handle completion notification
+                        message = message_data.decode('utf-8').strip()
+                        if message.startswith('FINISH:'):
+                            client_id = message.split(':')[1]
+                            logging.info(f'action: completion_received | result: success | client_id: {client_id}')
+                            break  # Client finished sending bets
+                        else:
+                            logging.error(f'action: completion_received | result: fail | invalid_message: {message}')
                             break
                     
-                    # Store all bets if all were valid
-                    if all_success and bets:
-                        try:
-                            store_bets(bets)
-                            
-                            # Send batch acknowledgment to client
-                            LotteryProtocol.acknowledge_batch(client_sock, True, len(bets))
-                            logging.info(f'action: apuesta_recibida | result: success | cantidad: {len(bets)}')
-                        except Exception as e:
-                            logging.error(f'action: store_batch | result: fail | error: {e}')
-                            LotteryProtocol.acknowledge_batch(client_sock, False, len(bets))
-                            logging.error(f'action: apuesta_recibida | result: fail | cantidad: {len(bets)}')
                     else:
-                        # Send failure acknowledgment
-                        LotteryProtocol.acknowledge_batch(client_sock, False, len(batch_data))
-                        logging.error(f'action: apuesta_recibida | result: fail | cantidad: {len(batch_data)}')
+                        # Unknown message type
+                        logging.error(f'action: receive_message | result: fail | unknown_message_type: {message_type}')
+                        break
                 
                 except (ProtocolError, OSError) as e:
-                    # Client disconnected or protocol error - end of batches
                     logging.info(f'action: client_disconnected | result: success | ip: {addr[0]} | batches_processed: {batch_count} | reason: {type(e).__name__}')
                     break
                 except Exception as e:
-                    logging.error(f'action: receive_batch | result: fail | ip: {addr[0]} | error: {e}')
+                    logging.error(f'action: handle_message | result: fail | ip: {addr[0]} | error: {e}')
                     break
             
         except Exception as e:

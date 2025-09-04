@@ -1,4 +1,5 @@
 import logging
+import socket
 from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger(__name__)
@@ -15,6 +16,10 @@ class LotteryProtocol:
     
     HEADER_SIZE = 4  # 4 bytes for message length header
     MAX_MESSAGE_SIZE = 8092  # Maximum message size in bytes
+    
+    # Message types
+    MESSAGE_TYPE_BATCH = 1      # Batch of bets
+    MESSAGE_TYPE_COMPLETION = 2 # Completion notification
     
     @staticmethod
     def deserialize_bet(data: bytes) -> Dict[str, Any]:
@@ -95,6 +100,94 @@ class LotteryProtocol:
             raise ProtocolError(f"Deserialization failed: {e}")
     
     @staticmethod
+    def deserialize_bet_data(data: bytes) -> Dict[str, Any]:
+        """
+        Deserialize a single bet from raw data (without header).
+        
+        Protocol format (bet data only):
+        - Fields: Each field prefixed with 2 bytes for the length, then the data
+        - Field order: nombre, apellido, documento, nacimiento, numero
+        """
+        try:
+            offset = 0
+            fields = []
+            
+            # Extract first 4 fields (nombre, apellido, documento, nacimiento)
+            for i in range(4):
+                if offset + 2 > len(data):
+                    raise ProtocolError(f"Incomplete field length for field {i}")
+                
+                field_length = int.from_bytes(data[offset:offset+2], byteorder='big')
+                offset += 2
+                
+                if offset + field_length > len(data):
+                    raise ProtocolError(f"Incomplete field data for field {i}")
+                
+                field_data = data[offset:offset+field_length].decode('utf-8')
+                fields.append(field_data)
+                offset += field_length
+            
+            # Extract numero field (4 bytes, no length prefix)
+            if offset + 4 > len(data):
+                raise ProtocolError("Incomplete numero field")
+            
+            numero = int.from_bytes(data[offset:offset+4], byteorder='big')
+            
+            return {
+                'nombre': fields[0],
+                'apellido': fields[1], 
+                'documento': fields[2],
+                'nacimiento': fields[3],
+                'numero': numero
+            }
+            
+        except (IndexError, UnicodeDecodeError) as e:
+            raise ProtocolError(f"Bet data deserialization failed: {e}")
+    
+    @staticmethod
+    def receive_message_with_type(socket):
+        """
+        Receive a message and return both the message type and data.
+        Returns tuple: (message_type, message_data)
+        """
+        try:
+            # First, receive the header (4 bytes for message length)
+            header_data = b''
+            while len(header_data) < LotteryProtocol.HEADER_SIZE:
+                chunk = socket.recv(LotteryProtocol.HEADER_SIZE - len(header_data))
+                if not chunk:
+                    raise ProtocolError("Connection closed while receiving header")
+                header_data += chunk
+            
+            # Extract message length from header
+            message_length = int.from_bytes(header_data, 'big')
+            
+            if message_length > LotteryProtocol.MAX_MESSAGE_SIZE:
+                raise ProtocolError(f"Message too large: {message_length} bytes")
+            
+            # Receive the complete message (type + data)
+            message_data = b''
+            while len(message_data) < message_length:
+                chunk = socket.recv(message_length - len(message_data))
+                if not chunk:
+                    raise ProtocolError("Connection closed while receiving message")
+                message_data += chunk
+            
+            # Extract message type (first byte)
+            if len(message_data) < 1:
+                raise ProtocolError("Message too short to contain type")
+            
+            message_type = message_data[0]
+            actual_data = message_data[1:]  # Rest of the message after type byte
+            
+            return message_type, actual_data
+            
+        except socket.timeout:
+            raise ProtocolError("Timeout while receiving message")
+        except Exception as e:
+            raise ProtocolError(f"Failed to receive message: {e}")
+    
+    @staticmethod
     def receive_message(socket) -> bytes:
         """
         Receive a complete message from socket. Returns the complete message (header + data)
@@ -142,8 +235,58 @@ class LotteryProtocol:
         """
         Receive batch of bets from socket using the protocol.
         """
-        message = LotteryProtocol.receive_message(socket)
-        return LotteryProtocol.deserialize_batch(message)
+        message_type, message_data = LotteryProtocol.receive_message_with_type(socket)
+        
+        # Verify this is a batch message
+        if message_type != LotteryProtocol.MESSAGE_TYPE_BATCH:
+            raise ProtocolError(f"Expected batch message (type {LotteryProtocol.MESSAGE_TYPE_BATCH}), got type {message_type}")
+        
+        # Deserialize the batch data (without the type byte, since it's already removed)
+        return LotteryProtocol.deserialize_batch_data(message_data)
+    
+    @staticmethod
+    def deserialize_batch_data(data: bytes) -> List[Dict[str, Any]]:
+        """
+        Deserialize batch of bets from message data (without header and type).
+        
+        Protocol format (batch data only):
+        - Batch size: 4 bytes (number of bets in batch)
+        - For each bet: same format as individual bet
+        """
+        try:
+            offset = 0
+            
+            # Read batch size (number of bets)
+            if len(data) < 4:
+                raise ProtocolError("Incomplete batch data: missing batch size")
+            
+            batch_size = int.from_bytes(data[offset:offset+4], byteorder='big')
+            offset += 4
+            
+            bets = []
+            for i in range(batch_size):
+                # Read bet length header
+                if offset + 4 > len(data):
+                    raise ProtocolError(f"Incomplete bet data: missing length header for bet {i}")
+                
+                bet_length = int.from_bytes(data[offset:offset+4], byteorder='big')
+                offset += 4
+                
+                # Read bet data
+                if offset + bet_length > len(data):
+                    raise ProtocolError(f"Incomplete bet data: expected {bet_length} bytes for bet {i}")
+                
+                bet_data = data[offset:offset+bet_length]
+                offset += bet_length
+                
+                # Deserialize individual bet (without header)
+                bet = LotteryProtocol.deserialize_bet_data(bet_data)
+                bets.append(bet)
+            
+            return bets
+            
+        except (IndexError, UnicodeDecodeError) as e:
+            raise ProtocolError(f"Batch deserialization failed: {e}")
     
     @staticmethod
     def deserialize_batch(data: bytes) -> List[Dict[str, Any]]:
@@ -222,6 +365,31 @@ class LotteryProtocol:
             socket.send(acknowledgment.encode('utf-8'))
         except OSError as e:
             raise ProtocolError(f"Batch acknowledgment send failed: {e}")
+    
+    @staticmethod
+    def receive_completion_notification(socket):
+        """
+        Receive completion notification from client using protocol format.
+        Returns the client ID that sent the completion notification.
+        """
+        try:
+            message_type, message_data = LotteryProtocol.receive_message_with_type(socket)
+            
+            # Verify this is a completion message
+            if message_type != LotteryProtocol.MESSAGE_TYPE_COMPLETION:
+                raise ProtocolError(f"Expected completion message (type {LotteryProtocol.MESSAGE_TYPE_COMPLETION}), got type {message_type}")
+            
+            # Decode the completion message
+            message = message_data.decode('utf-8').strip()
+            
+            if message.startswith('FINISH:'):
+                client_id = message.split(':')[1]
+                return client_id
+            else:
+                raise ProtocolError(f"Invalid completion message: {message}")
+                
+        except Exception as e:
+            raise ProtocolError(f"Failed to receive completion notification: {e}")
     
     @staticmethod
     def acknowledge_bet(socket, document: str, number: int) -> None:

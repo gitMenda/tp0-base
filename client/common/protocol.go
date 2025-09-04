@@ -19,6 +19,10 @@ const (
 	HeaderSize     = 4    // 4 bytes for message length
 	MaxMessageSize = 4096 // Maximum message size in bytes
 	ReceiveTimeout = 5 * time.Second
+
+	// Message types (1 byte each)
+	MessageTypeBatch      = 1 // Batch of bets
+	MessageTypeCompletion = 2 // Completion notification
 )
 
 type ProtocolError struct {
@@ -203,14 +207,19 @@ func (p *LotteryProtocol) SerializeBatch(batch *BatchRequest) ([]byte, error) {
 	}
 	message := buf.Bytes()
 
-	// Add header with total message length
-	headerBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(headerBytes, uint32(len(message)))
+	// Add message type byte at the beginning of the message
+	messageWithType := make([]byte, 1+len(message)) // 1 byte for type + message
+	messageWithType[0] = MessageTypeBatch
+	copy(messageWithType[1:], message)
 
-	// Combine header and message
+	// Add header with total message length (including type byte)
+	headerBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(headerBytes, uint32(len(messageWithType)))
+
+	// Combine header and message with type
 	var finalBuf bytes.Buffer
 	finalBuf.Write(headerBytes)
-	finalBuf.Write(message)
+	finalBuf.Write(messageWithType)
 
 	return finalBuf.Bytes(), nil
 }
@@ -258,4 +267,31 @@ func (p *LotteryProtocol) ReceiveBatchResponse(conn net.Conn) (*BatchResponse, e
 		Message: responseStr,
 		Count:   count,
 	}, nil
+}
+
+// SendCompletionNotification sends completion notification using the protocol format
+func (p *LotteryProtocol) SendCompletionNotification(conn net.Conn, clientID string) error {
+	message := "FINISH:" + clientID
+	messageBytes := []byte(message)
+
+	// Add message type byte at the beginning
+	messageWithType := make([]byte, 1+len(messageBytes)) // 1 byte for type + message
+	messageWithType[0] = MessageTypeCompletion
+	copy(messageWithType[1:], messageBytes)
+
+	// Add header with total message length (including type byte)
+	headerBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(headerBytes, uint32(len(messageWithType)))
+
+	// Combine header and message with type
+	var finalBuf bytes.Buffer
+	finalBuf.Write(headerBytes)
+	finalBuf.Write(messageWithType)
+
+	// Send using the existing sendMessage function
+	if err := p.sendMessage(conn, finalBuf.Bytes()); err != nil {
+		return fmt.Errorf("failed to send completion notification: %v", err)
+	}
+
+	return nil
 }

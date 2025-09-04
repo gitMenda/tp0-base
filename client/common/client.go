@@ -236,5 +236,17 @@ func (c *Client) StartClientLoop() {
 	} else {
 		log.Infof("action: loop_finished | result: success | client_id: %v | batches_sent: %v | bets_processed: %v",
 			c.config.ID, batchCount, betsProcessed)
+
+		// Send completion notification to server
+		if err := c.protocol.SendCompletionNotification(c.conn, c.config.ID); err != nil {
+			log.Errorf("action: send_completion | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		} else {
+			log.Infof("action: send_completion | result: success | client_id: %v", c.config.ID)
+
+			// Give the server time to receive the completion notification
+			log.Infof("action: waiting_for_server | result: in_progress | client_id: %v", c.config.ID)
+			time.Sleep(200 * time.Millisecond)
+			log.Infof("action: waiting_for_server | result: success | client_id: %v", c.config.ID)
+		}
 	}
 }
