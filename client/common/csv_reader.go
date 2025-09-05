@@ -30,6 +30,7 @@ func NewCSVReader(agencyID string) *CSVReader {
 }
 
 // reads a total of batchSize bets from the CSV file starting at offset
+// without loading the entire file into memory at once
 func (r *CSVReader) ReadBets(batchSize int, offset int) ([]BetData, error) {
 	file, err := os.Open(r.filePath)
 	if err != nil {
@@ -38,50 +39,69 @@ func (r *CSVReader) ReadBets(batchSize int, offset int) ([]BetData, error) {
 	defer file.Close()
 
 	reader := csv.NewReader(file)
-	records, err := reader.ReadAll()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read CSV file: %v", err)
-	}
-
-	// Skip header if present
-	headerOffset := 0
-	if len(records) > 0 && strings.Contains(strings.ToLower(records[0][0]), "nombre") {
-		headerOffset = 1
-	}
-
-	// Calculate actual start and end indices
-	startIndex := headerOffset + offset
-	endIndex := startIndex + batchSize
-	if endIndex > len(records) {
-		endIndex = len(records)
-	}
-
-	// Return empty if we're beyond available data
-	if startIndex >= len(records) {
-		return []BetData{}, nil
-	}
 
 	var bets []BetData
-	// read bets one by one until a total of batchSize bets are read from the CSV file and save them in the bets array
-	for i := startIndex; i < endIndex; i++ {
-		if len(records[i]) < 5 {
-			continue // Skip incomplete records
+	recordIndex := 0
+	hasHeader := false
+	targetStart := offset
+	targetEnd := offset + batchSize
+
+	for {
+		record, err := reader.Read()
+		if err != nil {
+			// Check if we reached EOF
+			if err.Error() == "EOF" {
+				break
+			}
+			return nil, fmt.Errorf("failed to read CSV record: %v", err)
 		}
 
-		numero, err := strconv.Atoi(records[i][4])
+		// Check if first record is a header (eg. column labels: nombre, apellido, documento, nacimiento, numero)
+		if recordIndex == 0 && strings.Contains(strings.ToLower(record[0]), "nombre") {
+			hasHeader = true
+			recordIndex++
+			continue
+		}
+
+		// Calculate the data record index (excluding header)
+		dataIndex := recordIndex
+		if hasHeader {
+			dataIndex = recordIndex - 1
+		}
+
+		// Skip records before our target offset
+		if dataIndex < targetStart {
+			recordIndex++
+			continue
+		}
+
+		// Stop if we've read enough records
+		if dataIndex >= targetEnd {
+			break
+		}
+
+		// Process the record if it has enough fields
+		if len(record) < 5 {
+			recordIndex++
+			continue // Skip incomplete/invalid records
+		}
+
+		numero, err := strconv.Atoi(record[4])
 		if err != nil {
+			recordIndex++
 			continue // Skip records with invalid numbers
 		}
 
 		bet := BetData{
-			Nombre:     strings.TrimSpace(records[i][0]),
-			Apellido:   strings.TrimSpace(records[i][1]),
-			Documento:  strings.TrimSpace(records[i][2]),
-			Nacimiento: strings.TrimSpace(records[i][3]),
+			Nombre:     strings.TrimSpace(record[0]),
+			Apellido:   strings.TrimSpace(record[1]),
+			Documento:  strings.TrimSpace(record[2]),
+			Nacimiento: strings.TrimSpace(record[3]),
 			Numero:     numero,
 		}
 
 		bets = append(bets, bet)
+		recordIndex++
 	}
 
 	return bets, nil
@@ -96,15 +116,31 @@ func (r *CSVReader) GetTotalBets() (int, error) {
 	defer file.Close()
 
 	reader := csv.NewReader(file)
-	records, err := reader.ReadAll()
-	if err != nil {
-		return 0, fmt.Errorf("failed to read CSV file: %v", err)
+	count := 0
+	hasHeader := false
+
+	for {
+		record, err := reader.Read()
+		if err != nil {
+			// Check if we reached EOF
+			if err.Error() == "EOF" {
+				break
+			}
+			return 0, fmt.Errorf("failed to read CSV record: %v", err)
+		}
+
+		// Check if first record is a header
+		if count == 0 && strings.Contains(strings.ToLower(record[0]), "nombre") {
+			hasHeader = true
+		}
+
+		count++
 	}
 
-	// Skip header if present
-	if len(records) > 0 && strings.Contains(strings.ToLower(records[0][0]), "nombre") {
-		return len(records) - 1, nil
+	// Subtract 1 if there's a header
+	if hasHeader {
+		count--
 	}
 
-	return len(records), nil
+	return count, nil
 }
